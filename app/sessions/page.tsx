@@ -3,13 +3,22 @@
 import { MOCK_SESSIONS, MOCK_VENUES } from '@/data/mock'
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
-  beginner: '新手場', intermediate: '中階場', advanced: '進階場', mixed: '混合場',
+  male_only:       '男網純男',
+  male_mixed:      '男網混排',
+  male_position:   '男網專位',
+  female_only:     '女網純女',
+  female_mixed:    '女網混排',
+  female_position: '女網專位',
+  rental:          '包場',
 }
 const SESSION_TYPE_COLOR: Record<string, { bg: string; text: string }> = {
-  beginner:     { bg: '#dcfce7', text: '#166534' },
-  intermediate: { bg: '#dbeafe', text: '#1e40af' },
-  advanced:     { bg: '#fce7f3', text: '#9d174d' },
-  mixed:        { bg: '#f3e8ff', text: '#6b21a8' },
+  male_only:       { bg: '#dbeafe', text: '#1e40af' },
+  male_mixed:      { bg: '#ede9fe', text: '#5b21b6' },
+  male_position:   { bg: '#e0f2fe', text: '#0369a1' },
+  female_only:     { bg: '#fce7f3', text: '#9d174d' },
+  female_mixed:    { bg: '#fdf2f8', text: '#a21caf' },
+  female_position: { bg: '#fdf4ff', text: '#7e22ce' },
+  rental:          { bg: '#f0fdf4', text: '#166534' },
 }
 const NET_HEIGHT_LABEL: Record<string, string> = {
   female: '女網', male: '男網', adjustable: '可調',

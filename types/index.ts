@@ -96,13 +96,16 @@ export interface Customer {
 
 // ── 場次 ─────────────────────────────────────────────────────
 
-export type SessionType = 'beginner' | 'intermediate' | 'advanced' | 'mixed'
+export type SessionType = 'male_only' | 'male_mixed' | 'male_position' | 'female_only' | 'female_mixed' | 'female_position' | 'rental'
 
 export const SESSION_TYPE_LABEL: Record<SessionType, string> = {
-  beginner:     '新手場',
-  intermediate: '中階場',
-  advanced:     '進階場',
-  mixed:        '混合場',
+  male_only:       '男網純男',
+  male_mixed:      '男網混排',
+  male_position:   '男網專位',
+  female_only:     '女網純女',
+  female_mixed:    '女網混排',
+  female_position: '女網專位',
+  rental:          '包場',
 }
 
 export type SessionStatus = 'open' | 'full' | 'cancelled' | 'completed'
