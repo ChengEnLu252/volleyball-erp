@@ -1,5 +1,6 @@
 'use client'
 
+import { use } from 'react'
 import { MOCK_SESSIONS, MOCK_CUSTOMERS } from '@/data/mock'
 
 const MOCK_REGISTRATIONS = [
@@ -14,9 +15,8 @@ const MOCK_REGISTRATIONS = [
 ]
 
 const SKILL_LABEL: Record<string, string> = {
-  'E': 'E', 'D': 'D', 'C': 'C', 'B-': 'B-', 'B': 'B', 'B+': 'B+', 'A': 'A', 'S': 'S',
+  'E':'E','D':'D','C':'C','B-':'B-','B':'B','B+':'B+','A':'A','S':'S',
 }
-
 const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'E':  { bg: '#f1f5f9', text: '#64748b' },
   'D':  { bg: '#dcfce7', text: '#166534' },
@@ -39,8 +39,9 @@ const METHOD_LABEL: Record<string, string> = {
   cash: '現金', transfer: '轉帳', online: '線上',
 }
 
-export default function SessionDetailPage({ params }: { params: { id: string } }) {
-  const session = MOCK_SESSIONS.find(s => s.id === params.id) ?? MOCK_SESSIONS[0]
+export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params)
+  const session = MOCK_SESSIONS.find(s => s.id === id) ?? MOCK_SESSIONS[0]
   const registrations = MOCK_REGISTRATIONS.map(r => ({
     ...r,
     customer: MOCK_CUSTOMERS.find(c => c.id === r.customerId)!,
@@ -52,17 +53,14 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
 
   return (
     <div style={{ padding: 24 }}>
-
-      {/* 返回 */}
       <a href="/sessions" style={{ fontSize: 13, color: '#888', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, marginBottom: 16 }}>
         ‹ 返回場次列表
       </a>
 
-      {/* 場次標題資訊 */}
       <div style={{
         background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0',
         padding: '20px 24px', marginBottom: 16,
-        display: 'flex', alignItems: 'center', gap: 24,
+        display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap',
       }}>
         <div>
           <div style={{ fontSize: 20, fontWeight: 700 }}>{session.venueName}</div>
@@ -70,39 +68,25 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
             {session.sessionDate} · {session.startTime}–{session.endTime} · {session.court ?? '主場地'}
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Tag label={session.sessionType === 'mixed' ? '混合場' : session.sessionType === 'beginner' ? '新手場' : session.sessionType === 'intermediate' ? '中階場' : '進階場'} bg="#f3e8ff" text="#6b21a8" />
-          <Tag label={session.netHeight === 'male' ? '男網' : session.netHeight === 'female' ? '女網' : '可調'} bg="#f5f4f0" text="#555" />
-          <Tag label={`$${session.price} / 人`} bg="#f5f4f0" text="#555" />
-        </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 16 }}>
           <Stat label="報名人數" value={`${registrations.length} / ${session.maxCapacity}`} />
-          <Stat label="已付款"   value={`${paidCount} 人`} color="#059669" />
+          <Stat label="已付款"   value={`${paidCount} 人`}   color="#059669" />
           <Stat label="未付款"   value={`${unpaidCount} 人`} color={unpaidCount > 0 ? '#e85d3a' : '#059669'} />
           <Stat label="已收金額" value={`$${totalPaid.toLocaleString()}`} color="#2563eb" />
         </div>
       </div>
 
-      {/* 報名名單 */}
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0', overflow: 'hidden' }}>
-        <div style={{ padding: '13px 20px', borderBottom: '1px solid #f0ede6', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>報名名單（{registrations.length} 人）</span>
-          <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>點選可編輯付款狀態</span>
+        <div style={{ padding: '13px 20px', borderBottom: '1px solid #f0ede6', fontSize: 13, fontWeight: 600 }}>
+          報名名單（{registrations.length} 人）
         </div>
 
-        {/* 表頭 */}
         <div style={{
           display: 'grid', gridTemplateColumns: '32px 1fr 80px 90px 80px 100px 90px',
           padding: '8px 20px', background: '#fafaf8',
           fontSize: 11, color: '#aaa', fontWeight: 500, gap: 12,
         }}>
-          <div>#</div>
-          <div>姓名</div>
-          <div>程度</div>
-          <div>報到狀態</div>
-          <div>付款方式</div>
-          <div>付款狀態</div>
-          <div style={{ textAlign: 'right' }}>金額</div>
+          <div>#</div><div>姓名</div><div>程度</div><div>報到</div><div>付款方式</div><div>付款狀態</div><div style={{ textAlign: 'right' }}>金額</div>
         </div>
 
         {registrations.map((reg, i) => (
@@ -113,7 +97,6 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
             background: reg.paymentStatus === 'unpaid' ? '#fffbfb' : '#fff',
           }}>
             <div style={{ fontSize: 13, color: '#aaa' }}>{i + 1}</div>
-
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{
                 width: 30, height: 30, borderRadius: 8, background: '#e8e6ff',
@@ -127,7 +110,6 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                 <div style={{ fontSize: 11, color: '#aaa' }}>{reg.customer.phone}</div>
               </div>
             </div>
-
             <div>
               {reg.customer.skillLevel && (
                 <span style={{
@@ -139,7 +121,6 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                 </span>
               )}
             </div>
-
             <div>
               <span style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 8,
@@ -149,11 +130,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                 {reg.status === 'attended' ? '✓ 已報到' : '未報到'}
               </span>
             </div>
-
-            <div style={{ fontSize: 12, color: '#555' }}>
-              {METHOD_LABEL[reg.method]}
-            </div>
-
+            <div style={{ fontSize: 12, color: '#555' }}>{METHOD_LABEL[reg.method]}</div>
             <div>
               <span style={{
                 fontSize: 11, padding: '2px 8px', borderRadius: 8,
@@ -163,7 +140,6 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                 {PAYMENT_LABEL[reg.paymentStatus]}
               </span>
             </div>
-
             <div style={{ fontSize: 13, fontWeight: 600, textAlign: 'right', color: reg.paymentStatus === 'unpaid' ? '#e85d3a' : '#1a1917' }}>
               ${reg.amount}
             </div>
@@ -171,14 +147,6 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
         ))}
       </div>
     </div>
-  )
-}
-
-function Tag({ label, bg, text }: { label: string; bg: string; text: string }) {
-  return (
-    <span style={{ fontSize: 11, padding: '3px 10px', borderRadius: 8, background: bg, color: text, fontWeight: 500 }}>
-      {label}
-    </span>
   )
 }
 
