@@ -1,4 +1,5 @@
 import { getDashboard } from '@/data/mock'
+import AiSection from '@/components/AiSection'
 
 export default async function DashboardPage() {
   const data = await getDashboard()
@@ -7,10 +8,10 @@ export default async function DashboardPage() {
     <div style={{ padding: '16px' }}>
       <style>{`
         @media (max-width: 768px) {
-          .dash-wrap { padding-top: 60px !important; }
+          .dash-wrap { padding-top: 64px !important; }
           .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
-          .main-grid { grid-template-columns: 1fr !important; }
-          .unpaid-grid { grid-template-columns: 1fr !important; }
+          .main-grid  { grid-template-columns: 1fr !important; }
+          .unpaid-grid{ grid-template-columns: 1fr !important; }
         }
       `}</style>
 
@@ -41,14 +42,10 @@ export default async function DashboardPage() {
                 <div style={{ fontSize: 13, fontWeight: 600 }}>${venue.totalRevenue.toLocaleString()}</div>
                 <div style={{ fontSize: 12, color: '#888' }}>{venue.totalPlayers} 人</div>
                 {venue.unpaidCount > 0 && (
-                  <span style={{ fontSize: 11, background: '#fff3cd', color: '#856404', padding: '2px 7px', borderRadius: 8 }}>
-                    未付 {venue.unpaidCount}
-                  </span>
+                  <span style={{ fontSize: 11, background: '#fff3cd', color: '#856404', padding: '2px 7px', borderRadius: 8 }}>未付 {venue.unpaidCount}</span>
                 )}
                 {venue.giftRatio > 30 && (
-                  <span style={{ fontSize: 11, background: '#fce7f3', color: '#9d174d', padding: '2px 7px', borderRadius: 8 }}>
-                    ⚠ 贈送偏高
-                  </span>
+                  <span style={{ fontSize: 11, background: '#fce7f3', color: '#9d174d', padding: '2px 7px', borderRadius: 8 }}>⚠ 贈送偏高</span>
                 )}
               </div>
             ))}
@@ -89,6 +86,8 @@ export default async function DashboardPage() {
             ))}
           </div>
         </Panel>
+
+        <AiSection />
       </div>
     </div>
   )
@@ -96,13 +95,8 @@ export default async function DashboardPage() {
 
 function StatCard({ label, value, sub, accent }: { label: string, value: string, sub: string, accent: string }) {
   return (
-    <div style={{
-      background: '#fff', borderRadius: 12, padding: '14px 16px',
-      border: '1px solid #e8e6e0', position: 'relative', overflow: 'hidden',
-    }}>
-      <div style={{ fontSize: 11, color: '#888', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>
-        {label}
-      </div>
+    <div style={{ background: '#fff', borderRadius: 12, padding: '14px 16px', border: '1px solid #e8e6e0', position: 'relative', overflow: 'hidden' }}>
+      <div style={{ fontSize: 11, color: '#888', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-1px', lineHeight: 1 }}>{value}</div>
       <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{sub}</div>
       <div style={{ position: 'absolute', top: 14, right: 14, width: 4, height: 32, borderRadius: 2, background: accent }} />
@@ -113,9 +107,7 @@ function StatCard({ label, value, sub, accent }: { label: string, value: string,
 function Panel({ title, children }: { title: string, children: React.ReactNode }) {
   return (
     <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0', overflow: 'hidden', marginBottom: 12 }}>
-      <div style={{ padding: '13px 16px', borderBottom: '1px solid #f0ede6', fontSize: 13, fontWeight: 600 }}>
-        {title}
-      </div>
+      <div style={{ padding: '13px 16px', borderBottom: '1px solid #f0ede6', fontSize: 13, fontWeight: 600 }}>{title}</div>
       <div style={{ padding: '4px 16px 12px' }}>{children}</div>
     </div>
   )
