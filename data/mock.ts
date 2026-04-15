@@ -82,11 +82,11 @@ export const MOCK_PRODUCTS: Product[] = [
 ]
 
 export const MOCK_PRODUCT_TRANSACTIONS: ProductTransaction[] = [
-  { id: 'pt1', productId: 'p1', venueId: 'v3', operatedBy: 'u4', type: 'gift',        quantity: -3, unitPrice: undefined,  totalAmount: undefined, customerId: 'c1', sessionId: 's4', notes: '教練贈送', operatedAt: TODAY+'T14:30:00Z', productName: '運動飲料', operatorName: '工讀生小明', customerName: '林小明'    },
-  { id: 'pt2', productId: 'p2', venueId: 'v1', operatedBy: 'u4', type: 'sale',        quantity: -1, unitPrice: 280,        totalAmount: 280,       customerId: 'c3', sessionId: undefined, notes: undefined, operatedAt: TODAY+'T10:15:00Z', productName: '護膝', operatorName: '工讀生小明', customerName: '王大偉' },
-  { id: 'pt3', productId: 'p1', venueId: 'v3', operatedBy: 'u2', type: 'gift',        quantity: -2, unitPrice: undefined,  totalAmount: undefined, customerId: undefined, sessionId: 's4', notes: '回饋活動', operatedAt: TODAY+'T13:00:00Z', productName: '運動飲料', operatorName: '王館主', customerName: undefined },
-  { id: 'pt4', productId: 'p1', venueId: 'v4', operatedBy: 'u4', type: 'sale',        quantity: -1, unitPrice: 35,         totalAmount: 35,        customerId: 'c4', sessionId: undefined, notes: undefined, operatedAt: TODAY+'T09:30:00Z', productName: '運動飲料', operatorName: '工讀生小明', customerName: '張志豪' },
-  { id: 'pt5', productId: 'p3', venueId: 'v1', operatedBy: 'u1', type: 'purchase_in', quantity: 5,  unitPrice: 750,        totalAmount: 3750,      customerId: undefined, sessionId: undefined, notes: '補貨', operatedAt: TODAY+'T08:00:00Z', productName: '排球', operatorName: '陳老闆', customerName: undefined },
+  { id: 'pt1', productId: 'p1', venueId: 'v3', operatedBy: 'u4', type: 'gift',        quantity: -3, unitPrice: null,  totalAmount: null, customerId: 'c1', sessionId: 's4', notes: '教練贈送', operatedAt: TODAY+'T14:30:00Z', productName: '運動飲料', operatorName: '工讀生小明', customerName: '林小明'    },
+  { id: 'pt2', productId: 'p2', venueId: 'v1', operatedBy: 'u4', type: 'sale',        quantity: -1, unitPrice: 280,        totalAmount: 280,       customerId: 'c3', sessionId: null, notes: null, operatedAt: TODAY+'T10:15:00Z', productName: '護膝', operatorName: '工讀生小明', customerName: '王大偉' },
+  { id: 'pt3', productId: 'p1', venueId: 'v3', operatedBy: 'u2', type: 'gift',        quantity: -2, unitPrice: null,  totalAmount: null, customerId: null, sessionId: 's4', notes: '回饋活動', operatedAt: TODAY+'T13:00:00Z', productName: '運動飲料', operatorName: '王館主', customerName: undefined },
+  { id: 'pt4', productId: 'p1', venueId: 'v4', operatedBy: 'u4', type: 'sale',        quantity: -1, unitPrice: 35,         totalAmount: 35,        customerId: 'c4', sessionId: null, notes: null, operatedAt: TODAY+'T09:30:00Z', productName: '運動飲料', operatorName: '工讀生小明', customerName: '張志豪' },
+  { id: 'pt5', productId: 'p3', venueId: 'v1', operatedBy: 'u1', type: 'purchase_in', quantity: 5,  unitPrice: 750,        totalAmount: 3750,      customerId: null, sessionId: null, notes: '補貨', operatedAt: TODAY+'T08:00:00Z', productName: '排球', operatorName: '陳老闆', customerName: undefined },
 ]
 
 export async function getDashboard(): Promise<DashboardData> {
