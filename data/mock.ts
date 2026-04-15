@@ -107,3 +107,54 @@ export async function getSessions(venueId?: string, date?: string): Promise<Sess
 export async function getProducts(venueId?: string): Promise<Product[]> {
   return MOCK_PRODUCTS.filter(p => !venueId || p.venueId === null || p.venueId === venueId)
 }
+
+export const MOCK_VENUE_PRODUCTS: {
+  venueId: string
+  venueName: string
+  products: { id: string; name: string; unitPrice: number; currentStock: number; lowStockThreshold: number; isShared: boolean }[]
+}[] = [
+  {
+    venueId: 'v1', venueName: '球魔方',
+    products: [
+      { id: 'v1p1', name: '運動飲料', unitPrice: 35,  currentStock: 18, lowStockThreshold: 5,  isShared: true  },
+      { id: 'v1p2', name: '護膝',     unitPrice: 280, currentStock: 8,  lowStockThreshold: 3,  isShared: true  },
+      { id: 'v1p3', name: '球魔方帽', unitPrice: 250, currentStock: 24, lowStockThreshold: 10, isShared: false },
+      { id: 'v1p4', name: '運動襪',   unitPrice: 80,  currentStock: 30, lowStockThreshold: 10, isShared: false },
+    ]
+  },
+  {
+    venueId: 'v2', venueName: 'Ace',
+    products: [
+      { id: 'v2p1', name: '運動飲料', unitPrice: 35,  currentStock: 12, lowStockThreshold: 5,  isShared: true  },
+      { id: 'v2p2', name: '護膝',     unitPrice: 280, currentStock: 4,  lowStockThreshold: 3,  isShared: true  },
+      { id: 'v2p3', name: '護踝',     unitPrice: 180, currentStock: 6,  lowStockThreshold: 3,  isShared: false },
+    ]
+  },
+  {
+    venueId: 'v3', venueName: '飛翼',
+    products: [
+      { id: 'v3p1', name: '運動飲料', unitPrice: 35,  currentStock: 3,  lowStockThreshold: 5,  isShared: true  },
+      { id: 'v3p2', name: '護膝',     unitPrice: 280, currentStock: 10, lowStockThreshold: 3,  isShared: true  },
+      { id: 'v3p3', name: '排球',     unitPrice: 850, currentStock: 5,  lowStockThreshold: 2,  isShared: false },
+      { id: 'v3p4', name: '運動毛巾', unitPrice: 120, currentStock: 15, lowStockThreshold: 5,  isShared: false },
+    ]
+  },
+  {
+    venueId: 'v4', venueName: '日日',
+    products: [
+      { id: 'v4p1', name: '運動飲料', unitPrice: 35,  currentStock: 2,  lowStockThreshold: 5,  isShared: true  },
+      { id: 'v4p2', name: '護膝',     unitPrice: 280, currentStock: 6,  lowStockThreshold: 3,  isShared: true  },
+      { id: 'v4p3', name: '運動襪',   unitPrice: 80,  currentStock: 45, lowStockThreshold: 10, isShared: false },
+    ]
+  },
+  {
+    venueId: 'v5', venueName: 'Playone',
+    products: [
+      { id: 'v5p1', name: '運動飲料', unitPrice: 35,  currentStock: 20, lowStockThreshold: 5,  isShared: true  },
+      { id: 'v5p2', name: '護膝',     unitPrice: 280, currentStock: 2,  lowStockThreshold: 3,  isShared: true  },
+      { id: 'v5p3', name: '排球',     unitPrice: 850, currentStock: 3,  lowStockThreshold: 2,  isShared: false },
+      { id: 'v5p4', name: '護踝',     unitPrice: 180, currentStock: 8,  lowStockThreshold: 3,  isShared: false },
+      { id: 'v5p5', name: '運動毛巾', unitPrice: 120, currentStock: 0,  lowStockThreshold: 5,  isShared: false },
+    ]
+  },
+]
