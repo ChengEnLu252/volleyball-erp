@@ -57,11 +57,11 @@ export const MOCK_ALERTS: AnomalyAlert[] = [
 ]
 
 export const MOCK_UNPAID: UnpaidRegistration[] = [
-  { registrationId: 'r1', customerName: '林小明', venueId: 'v1', venueName: '球魔方',  sessionDate: TODAY, sessionTime: '09:00', sessionType: 'mixed',        amount: 250, method: 'cash',     waitedMinutes: 120 },
-  { registrationId: 'r2', customerName: '陳美玲', venueId: 'v3', venueName: '飛翼',   sessionDate: TODAY, sessionTime: '14:00', sessionType: 'intermediate', amount: 300, method: 'transfer', waitedMinutes: 45  },
-  { registrationId: 'r3', customerName: '王大偉', venueId: 'v3', venueName: '飛翼',   sessionDate: TODAY, sessionTime: '14:00', sessionType: 'intermediate', amount: 300, method: 'cash',     waitedMinutes: 45  },
-  { registrationId: 'r4', customerName: '張志豪', venueId: 'v4', venueName: '日日',   sessionDate: TODAY, sessionTime: '09:00', sessionType: 'beginner',     amount: 200, method: 'cash',     waitedMinutes: 305 },
-  { registrationId: 'r5', customerName: '劉雅婷', venueId: 'v5', venueName: 'Playone', sessionDate: TODAY, sessionTime: '16:00', sessionType: 'advanced',    amount: 300, method: 'transfer', waitedMinutes: 20  },
+  { registrationId: 'r1', customerName: '林小明', venueId: 'v1', venueName: '球魔方',  sessionDate: TODAY, sessionTime: '09:00', sessionType: 'male_mixed',        amount: 250, method: 'cash',     waitedMinutes: 120 },
+  { registrationId: 'r2', customerName: '陳美玲', venueId: 'v3', venueName: '飛翼',   sessionDate: TODAY, sessionTime: '14:00', sessionType: 'male_only', amount: 300, method: 'transfer', waitedMinutes: 45  },
+  { registrationId: 'r3', customerName: '王大偉', venueId: 'v3', venueName: '飛翼',   sessionDate: TODAY, sessionTime: '14:00', sessionType: 'male_only', amount: 300, method: 'cash',     waitedMinutes: 45  },
+  { registrationId: 'r4', customerName: '張志豪', venueId: 'v4', venueName: '日日',   sessionDate: TODAY, sessionTime: '09:00', sessionType: 'female_mixed',     amount: 200, method: 'cash',     waitedMinutes: 305 },
+  { registrationId: 'r5', customerName: '劉雅婷', venueId: 'v5', venueName: 'Playone', sessionDate: TODAY, sessionTime: '16:00', sessionType: 'male_position',    amount: 300, method: 'transfer', waitedMinutes: 20  },
 ]
 
 export const MOCK_DASHBOARD: DashboardData = {
