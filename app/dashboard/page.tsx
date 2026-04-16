@@ -114,5 +114,10 @@ function Panel({ title, children }: { title: string, children: React.ReactNode }
 }
 
 const VENUE_COLOR: Record<string, string> = {
-  v1: '#7c6af7', v2: '#0ea5e9', v3: '#f59e0b', v4: '#10b981', v5: '#f43f5e',
+  v1: '#7c6af7',
+  v2: '#0ea5e9',
+  v3: '#f59e0b',
+  v4: '#10b981',
+  v5: '#f43f5e',
+  v6: '#06b6d4',
 }

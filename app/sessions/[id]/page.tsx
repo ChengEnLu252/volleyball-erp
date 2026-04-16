@@ -19,13 +19,14 @@ const SKILL_LABEL: Record<string, string> = {
 }
 const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'E':  { bg: '#f1f5f9', text: '#64748b' },
-  'D':  { bg: '#dcfce7', text: '#166534' },
+  'D':  { bg: '#e2f0fb', text: '#1e6098' },
   'C':  { bg: '#dbeafe', text: '#1e40af' },
-  'B-': { bg: '#e0f2fe', text: '#0369a1' },
-  'B':  { bg: '#fef3c7', text: '#92400e' },
-  'B+': { bg: '#fed7aa', text: '#9a3412' },
-  'A':  { bg: '#fce7f3', text: '#9d174d' },
+  'B':  { bg: '#dcfce7', text: '#166534' },
+  'B+': { bg: '#fef3c7', text: '#92400e' },
+  'A':  { bg: '#fed7aa', text: '#9a3412' },
+  'A+': { bg: '#fce7f3', text: '#9d174d' },
   'S':  { bg: '#f3e8ff', text: '#6b21a8' },
+  'S*': { bg: '#1a1917', text: '#d4a843' },
 }
 const PAYMENT_LABEL: Record<string, string> = {
   paid: '已付清', unpaid: '未付款', partial: '部分付款',

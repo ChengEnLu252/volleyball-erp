@@ -9,6 +9,7 @@ export const MOCK_VENUES: Venue[] = [
   { id: 'v3', name: '飛翼',   address: '新北市板橋區文化路',        phone: '02-2956-xxxx', isActive: true, createdAt: '2022-06-01T00:00:00Z' },
   { id: 'v4', name: '日日',   address: '台北市中山區中山北路',      phone: '02-2521-xxxx', isActive: true, createdAt: '2023-01-01T00:00:00Z' },
   { id: 'v5', name: 'Playone', address: '台北市松山區八德路',       phone: '02-2748-xxxx', isActive: true, createdAt: '2023-06-01T00:00:00Z' },
+  { id: 'v6', name: 'Smash',  address: '新北市新莊區新莊路',        phone: '02-2201-xxxx', isActive: true, createdAt: '2024-06-01T00:00:00Z' },
 ]
 
 export const MOCK_USERS: User[] = [
@@ -28,13 +29,13 @@ export const MOCK_CUSTOMERS: Customer[] = [
   { id: 'c7',  name: '黃淑芬', phone: '0911-111-007', email: 'sf@gmail.com', skillLevel: 'B',  preferredNetHeight: 'female',     notes: null,     isBanned: false, createdAt: '2023-06-01T00:00:00Z' },
   { id: 'c8',  name: '楊明哲', phone: '0911-111-008', email: null,           skillLevel: 'A',  preferredNetHeight: 'male',       notes: '前國手', isBanned: false, createdAt: '2022-04-01T00:00:00Z' },
   { id: 'c9',  name: '蔡依玲', phone: '0911-111-009', email: null,           skillLevel: 'E',  preferredNetHeight: 'female',     notes: null,     isBanned: false, createdAt: '2024-01-10T00:00:00Z' },
-  { id: 'c10', name: '鄭志明', phone: '0911-111-010', email: 'zm@gmail.com', skillLevel: 'B-', preferredNetHeight: 'adjustable', notes: null,     isBanned: false, createdAt: '2023-09-01T00:00:00Z' },
+  { id: 'c10', name: '鄭志明', phone: '0911-111-010', email: 'zm@gmail.com', skillLevel: 'B', preferredNetHeight: 'adjustable', notes: null,     isBanned: false, createdAt: '2023-09-01T00:00:00Z' },
 ]
 
 const TODAY = new Date().toISOString().split('T')[0]
 
 export const MOCK_SESSIONS: Session[] = [
-  { id: 's1', venueId: 'v1', createdBy: 'u2', sessionDate: TODAY, startTime: '09:00', endTime: '12:00', court: 'A館', netHeight: 'male',   sessionType: 'male_mixed',    price: 250, maxCapacity: 18, minSkillRequired: 'B-', maxSkillAllowed: null, status: 'completed', notes: '男9女9',  createdAt: TODAY+'T00:00:00Z', updatedAt: TODAY+'T00:00:00Z', venueName: '球魔方',  currentCount: 16 },
+  { id: 's1', venueId: 'v1', createdBy: 'u2', sessionDate: TODAY, startTime: '09:00', endTime: '12:00', court: 'A館', netHeight: 'male',   sessionType: 'male_mixed',    price: 250, maxCapacity: 18, minSkillRequired: 'B', maxSkillAllowed: null, status: 'completed', notes: '男9女9',  createdAt: TODAY+'T00:00:00Z', updatedAt: TODAY+'T00:00:00Z', venueName: '球魔方',  currentCount: 16 },
   { id: 's2', venueId: 'v1', createdBy: 'u2', sessionDate: TODAY, startTime: '14:00', endTime: '17:00', court: 'A館', netHeight: 'female', sessionType: 'female_mixed',  price: 220, maxCapacity: 18, minSkillRequired: null, maxSkillAllowed: null, status: 'open',      notes: '男女不限', createdAt: TODAY+'T00:00:00Z', updatedAt: TODAY+'T00:00:00Z', venueName: '球魔方',  currentCount: 11 },
   { id: 's3', venueId: 'v2', createdBy: 'u3', sessionDate: TODAY, startTime: '10:00', endTime: '13:00', court: null,  netHeight: 'male',   sessionType: 'male_only',     price: 280, maxCapacity: 18, minSkillRequired: 'B',  maxSkillAllowed: 'A',  status: 'full',      notes: null,      createdAt: TODAY+'T00:00:00Z', updatedAt: TODAY+'T00:00:00Z', venueName: 'Ace',    currentCount: 18 },
   { id: 's4', venueId: 'v3', createdBy: 'u2', sessionDate: TODAY, startTime: '14:00', endTime: '17:00', court: 'B館', netHeight: 'male',   sessionType: 'male_position', price: 300, maxCapacity: 18, minSkillRequired: 'B',  maxSkillAllowed: null, status: 'open',      notes: null,      createdAt: TODAY+'T00:00:00Z', updatedAt: TODAY+'T00:00:00Z', venueName: '飛翼',   currentCount: 13 },
@@ -48,6 +49,7 @@ export const MOCK_VENUE_SUMMARIES: VenueDailySummary[] = [
   { venueId: 'v3', venueName: '飛翼',   date: TODAY, totalRevenue: 10800, totalPlayers: 21, totalSessions: 4, unpaidCount: 3, unpaidAmount: 900,  giftRatio: 42, stockAlerts: 1 },
   { venueId: 'v4', venueName: '日日',   date: TODAY, totalRevenue: 4000,  totalPlayers: 8,  totalSessions: 2, unpaidCount: 1, unpaidAmount: 200,  giftRatio: 12, stockAlerts: 1 },
   { venueId: 'v5', venueName: 'Playone', date: TODAY, totalRevenue: 7200, totalPlayers: 14, totalSessions: 3, unpaidCount: 1, unpaidAmount: 300,  giftRatio: 20, stockAlerts: 0 },
+  { venueId: 'v6', venueName: 'Smash',  date: TODAY, totalRevenue: 8100,  totalPlayers: 16, totalSessions: 3, unpaidCount: 0, unpaidAmount: 0,    giftRatio: 10, stockAlerts: 0 },
 ]
 
 export const MOCK_ALERTS: AnomalyAlert[] = [
