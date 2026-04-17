@@ -193,7 +193,7 @@ export const MOCK_PUBLIC_SESSIONS = [
   { id: 'ps5', venueId: 'v3', sessionDate: TWO_WEEKS,  startTime: '09:00', endTime: '12:00', sessionType: 'female_only',  netHeight: 'female', price: 220, maxCapacity: 18, currentCount: 0,  minSkillRequired: null, status: 'open',      notes: '純女場，不限程度' },
 ]
 
-export const MOCK_RENTAL_SLOTS: import('./types').RentalSlot[] = [
+export const MOCK_RENTAL_SLOTS: any[] = [
   { id: 'r1', venueId: 'v3', venueName: '飛翼排球館', date: NEXT_WEEK,  startTime: '08:00', endTime: '11:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'available', notes: '可協商延長' },
   { id: 'r2', venueId: 'v3', venueName: '飛翼排球館', date: NEXT_WEEK,  startTime: '19:00', endTime: '22:00', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '晚場，假日加收 $200' },
   { id: 'r3', venueId: 'v3', venueName: '飛翼排球館', date: TWO_WEEKS,  startTime: '08:00', endTime: '11:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'pending',   notes: '洽談中' },
