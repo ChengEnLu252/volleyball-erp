@@ -319,3 +319,51 @@ export interface PaginatedResponse<T> {
   page: number
   pageSize: number
 }
+
+// ── 報名系統（客人端）────────────────────────────────────────
+
+/** 四項技能程度（客人自評） */
+export type SkillScore = 'E' | 'D' | 'C' | 'B' | 'B+' | 'A' | 'A+' | 'S' | 'S*'
+
+export interface SkillSelfAssessment {
+  attack:  SkillScore   // 攻擊
+  defense: SkillScore   // 防守
+  setting: SkillScore   // 舉球
+  block:   SkillScore   // 攔網
+}
+
+/** 公開報名（客人填的） */
+export interface PublicRegistration {
+  id:             UUID
+  sessionId:      UUID
+  leadName:       string        // 代表人姓名
+  leadPhone:      string        // 代表人電話
+  leadNickname:   string | null // 代表人外號
+  players: {
+    name:         string
+    phone:        string
+    nickname:     string | null
+    skillSelf:    SkillSelfAssessment
+    skillVerified: SkillScore | null  // 館長核定程度
+  }[]
+  status:         'confirmed' | 'waitlist' | 'cancelled' | 'blacklisted'
+  cancelNote:     string | null // 取消原因
+  replacedBy:     string | null // 找到的替補電話
+  registeredAt:   Timestamp
+  cancelledAt:    Timestamp | null
+}
+
+/** 包場資訊 */
+export interface RentalSlot {
+  id:           UUID
+  venueId:      UUID
+  venueName:    string
+  date:         string
+  startTime:    string
+  endTime:      string
+  pricePerHour: number
+  totalHours:   number
+  totalPrice:   number
+  status:       'available' | 'pending' | 'booked'
+  notes:        string | null
+}

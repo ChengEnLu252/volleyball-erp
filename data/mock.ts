@@ -9,7 +9,7 @@ export const MOCK_VENUES: Venue[] = [
   { id: 'v3', name: '飛翼',   address: '新北市板橋區文化路',        phone: '02-2956-xxxx', isActive: true, createdAt: '2022-06-01T00:00:00Z' },
   { id: 'v4', name: '日日',   address: '台北市中山區中山北路',      phone: '02-2521-xxxx', isActive: true, createdAt: '2023-01-01T00:00:00Z' },
   { id: 'v5', name: 'Playone', address: '台北市松山區八德路',       phone: '02-2748-xxxx', isActive: true, createdAt: '2023-06-01T00:00:00Z' },
-  { id: 'v6', name: 'Smash',  address: '新北市新莊區新莊路',        phone: '02-2201-xxxx', isActive: true, createdAt: '2024-06-01T00:00:00Z' },
+  { id: 'v6', name: '就醬瘋',  address: '新北市新莊區新莊路',        phone: '02-2201-xxxx', isActive: true, createdAt: '2024-06-01T00:00:00Z' },
 ]
 
 export const MOCK_USERS: User[] = [
@@ -49,7 +49,7 @@ export const MOCK_VENUE_SUMMARIES: VenueDailySummary[] = [
   { venueId: 'v3', venueName: '飛翼',   date: TODAY, totalRevenue: 10800, totalPlayers: 21, totalSessions: 4, unpaidCount: 3, unpaidAmount: 900,  giftRatio: 42, stockAlerts: 1 },
   { venueId: 'v4', venueName: '日日',   date: TODAY, totalRevenue: 4000,  totalPlayers: 8,  totalSessions: 2, unpaidCount: 1, unpaidAmount: 200,  giftRatio: 12, stockAlerts: 1 },
   { venueId: 'v5', venueName: 'Playone', date: TODAY, totalRevenue: 7200, totalPlayers: 14, totalSessions: 3, unpaidCount: 1, unpaidAmount: 300,  giftRatio: 20, stockAlerts: 0 },
-  { venueId: 'v6', venueName: 'Smash',  date: TODAY, totalRevenue: 8100,  totalPlayers: 16, totalSessions: 3, unpaidCount: 0, unpaidAmount: 0,    giftRatio: 10, stockAlerts: 0 },
+  { venueId: 'v6', venueName: '就醬瘋',  date: TODAY, totalRevenue: 8100,  totalPlayers: 16, totalSessions: 3, unpaidCount: 0, unpaidAmount: 0,    giftRatio: 10, stockAlerts: 0 },
 ]
 
 export const MOCK_ALERTS: AnomalyAlert[] = [
@@ -160,4 +160,42 @@ export const MOCK_VENUE_PRODUCTS: {
       { id: 'v5p5', name: '運動毛巾', unitPrice: 120, currentStock: 0,  lowStockThreshold: 5,  isShared: false },
     ]
   },
+]
+
+// ── 報名系統 Mock 資料 ────────────────────────────────────────
+
+export const VENUE_SLUGS: Record<string, string> = {
+  'flywing':    'v3',
+  'ace':        'v2',
+  'magicblock': 'v1',
+  'hibi':       'v4',
+  'playone':    'v5',
+  'smash':      'v6',
+}
+
+export const VENUE_BY_SLUG: Record<string, { id: string; name: string; address: string; phone: string; transferInfo: string }> = {
+  'flywing':    { id: 'v3', name: '飛翼排球館',  address: '新北市板橋區文化路一段', phone: '02-2956-xxxx', transferInfo: '玉山銀行 808-xxxx-xxxxxx 飛翼體育' },
+  'ace':        { id: 'v2', name: 'Ace 排球館',  address: '台北市信義區松仁路',     phone: '02-2345-xxxx', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育' },
+  'magicblock': { id: 'v1', name: '球魔方排球館', address: '台北市大安區復興南路',  phone: '02-2701-xxxx', transferInfo: '玉山銀行 808-xxxx-xxxxxx 球魔方' },
+  'hibi':       { id: 'v4', name: '日日排球館',  address: '台北市中山區中山北路',   phone: '02-2521-xxxx', transferInfo: '玉山銀行 808-xxxx-xxxxxx 日日體育' },
+  'playone':    { id: 'v5', name: 'Playone 排球館', address: '台北市松山區八德路', phone: '02-2748-xxxx', transferInfo: '玉山銀行 808-xxxx-xxxxxx Playone' },
+  'smash':      { id: 'v6', name: '就醬瘋排球館', address: '新北市新莊區新莊路',  phone: '02-2201-xxxx', transferInfo: '玉山銀行 808-xxxx-xxxxxx 就醬瘋' },
+}
+
+const NEXT_WEEK = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+const TWO_WEEKS = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+
+export const MOCK_PUBLIC_SESSIONS = [
+  { id: 'ps1', venueId: 'v3', sessionDate: TODAY,      startTime: '14:00', endTime: '17:00', sessionType: 'male_mixed',   netHeight: 'male',   price: 280, maxCapacity: 18, currentCount: 13, minSkillRequired: 'B',  status: 'open',      notes: '男女不限，B 以上' },
+  { id: 'ps2', venueId: 'v3', sessionDate: TODAY,      startTime: '16:00', endTime: '19:00', sessionType: 'male_only',    netHeight: 'male',   price: 300, maxCapacity: 18, currentCount: 18, minSkillRequired: 'A',  status: 'full',      notes: '純男場，A 以上' },
+  { id: 'ps3', venueId: 'v3', sessionDate: NEXT_WEEK,  startTime: '10:00', endTime: '13:00', sessionType: 'female_mixed', netHeight: 'female', price: 250, maxCapacity: 18, currentCount: 6,  minSkillRequired: null, status: 'open',      notes: '女網混排，不限程度' },
+  { id: 'ps4', venueId: 'v3', sessionDate: NEXT_WEEK,  startTime: '14:00', endTime: '17:00', sessionType: 'male_mixed',   netHeight: 'male',   price: 280, maxCapacity: 18, currentCount: 9,  minSkillRequired: 'B',  status: 'open',      notes: '男女混排，B 以上' },
+  { id: 'ps5', venueId: 'v3', sessionDate: TWO_WEEKS,  startTime: '09:00', endTime: '12:00', sessionType: 'female_only',  netHeight: 'female', price: 220, maxCapacity: 18, currentCount: 0,  minSkillRequired: null, status: 'open',      notes: '純女場，不限程度' },
+]
+
+export const MOCK_RENTAL_SLOTS: import('./types').RentalSlot[] = [
+  { id: 'r1', venueId: 'v3', venueName: '飛翼排球館', date: NEXT_WEEK,  startTime: '08:00', endTime: '11:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'available', notes: '可協商延長' },
+  { id: 'r2', venueId: 'v3', venueName: '飛翼排球館', date: NEXT_WEEK,  startTime: '19:00', endTime: '22:00', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '晚場，假日加收 $200' },
+  { id: 'r3', venueId: 'v3', venueName: '飛翼排球館', date: TWO_WEEKS,  startTime: '08:00', endTime: '11:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'pending',   notes: '洽談中' },
+  { id: 'r4', venueId: 'v3', venueName: '飛翼排球館', date: TWO_WEEKS,  startTime: '14:00', endTime: '17:00', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '假日下午場' },
 ]
