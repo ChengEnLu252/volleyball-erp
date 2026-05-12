@@ -8,7 +8,7 @@
 //   2. KPI 卡 × 4    — 獎金池 / 冠軍 / 平均 K / 待改善
 //   3. 排行榜 table  — 6 行（owner）或 1 行（manager）
 //   4. 走勢圖（SVG） — 過去 6 個月各館獎金
-//   5. 審梸卡        — K 拆解 + 季預測 + AI 建議
+//   5. 審視卡        — K 拆解 + 季預測 + AI 建議
 //
 // 視角過濾完全沿用 3.5 pattern：
 //   - getCurrentVisibleVenueIds() 在 mount 後讀
@@ -60,7 +60,7 @@ export default function PerformancePage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const overview = useMemo(() => getPerformanceOverview(visible), [visible, storeVersion])
 
-  // 審梸卡選中的館；預設 = 排行榜第一名
+  // 審視卡選中的館；預設 = 排行榜第一名
   const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null)
 
   // 視角切換後，若選中的館不在視角內 → reset 成 null（自動 fallback 到 top）
@@ -109,7 +109,7 @@ export default function PerformancePage() {
             background: '#fef3c7', color: '#854d0e',
             border: '1px solid #fde68a',
           }}>
-            💡 獎金 = 入帳 × 5% × K 係數（拆解見下方審梸卡）
+            💡 獎金 = 入帳 × 5% × K 係數（拆解見下方審視卡）
           </div>
         </div>
 
@@ -126,7 +126,7 @@ export default function PerformancePage() {
         {/* 走勢圖 */}
         <TrendChart overview={overview} />
 
-        {/* 審梸卡 */}
+        {/* 審視卡 */}
         {selected ? (
           <ProjectionCard perf={selected} />
         ) : (
@@ -238,7 +238,7 @@ function Leaderboard({ overview, selectedVenueId, onSelect }: {
     }}>
       <div style={{ marginBottom: 12, display: 'flex', alignItems: 'baseline', justifyContent: 'space-between' }}>
         <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>📊 本月排行榜</h2>
-        <span style={{ fontSize: 11, color: '#888' }}>點任一行查看審梸詳情 ↓</span>
+        <span style={{ fontSize: 11, color: '#888' }}>點任一行查看審視詳情 ↓</span>
       </div>
 
       <div className="perf-table-wrap">
@@ -431,7 +431,7 @@ function TrendChart({ overview }: { overview: ReturnType<typeof getPerformanceOv
 
 
 // ============================================================
-// 審梸卡 — K 拆解 + 季預測 + AI 建議
+// 審視卡 — K 拆解 + 季預測 + AI 建議
 // ============================================================
 
 function ProjectionCard({ perf }: { perf: VenuePerformance }) {
@@ -444,7 +444,7 @@ function ProjectionCard({ perf }: { perf: VenuePerformance }) {
     }}>
       <div style={{ marginBottom: 16 }}>
         <h2 style={{ fontSize: 15, fontWeight: 600, margin: 0 }}>
-          🔍 審梸卡：{perf.venueName} · {perf.managerName ?? <span style={{ color: '#bbb' }}>（館長空缺）</span>}
+          🔍 審視卡：{perf.venueName} · {perf.managerName ?? <span style={{ color: '#bbb' }}>（館長空缺）</span>}
         </h2>
         <p style={{ fontSize: 12, color: '#888', margin: '4px 0 0' }}>
           本月入帳 {dollar(perf.monthRevenue)} ·
