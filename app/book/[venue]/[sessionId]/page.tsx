@@ -1,7 +1,7 @@
 'use client'
 
 import { use, useState } from 'react'
-import { VENUE_BY_SLUG, MOCK_PUBLIC_SESSIONS } from '@/data/mock'
+import { getVenueBySlug, listPublicSessions, getPublicSession } from '@/data/api'
 
 const SKILL_OPTIONS = ['E','D','C','B','B+','A','A+','S','S*'] as const
 const SKILL_DESC: Record<string, string> = {
@@ -52,8 +52,8 @@ export default function BookingPage({ params, searchParams }: {
   const { waitlist } = use(searchParams)
   const isWaitlist = waitlist === 'true'
 
-  const venueInfo = VENUE_BY_SLUG[venue]
-  const session = MOCK_PUBLIC_SESSIONS.find(s => s.id === sessionId) ?? MOCK_PUBLIC_SESSIONS[0]
+  const venueInfo = getVenueBySlug(venue)
+  const session = getPublicSession(sessionId) ?? listPublicSessions()[0]
 
   const [players, setPlayers] = useState<Player[]>([emptyPlayer()])
   const [payMethod, setPayMethod] = useState<'cash' | 'transfer'>('cash')

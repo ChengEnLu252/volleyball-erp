@@ -1,6 +1,8 @@
 'use client'
 
-import { MOCK_SESSIONS, MOCK_VENUES } from '@/data/mock'
+import { useEffect, useMemo, useState } from 'react'
+import { listSessions, listVenues, getCurrentVisibleVenueIds } from '@/data/api'
+import { useStoreSync } from '@/data/store'
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
   male_only:       '男網純男',
@@ -34,7 +36,23 @@ const STATUS_COLOR: Record<string, { bg: string; text: string }> = {
 }
 
 export default function SessionsPage() {
-  const sessions = MOCK_SESSIONS
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+
+  const today = new Date().toISOString().split('T')[0]
+  const inTwoWeeks = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
+
+  const sessions = useMemo(() => {
+    const raw = listSessions({ dateFrom: today, dateTo: inTwoWeeks })
+      .filter(s => s.status !== 'cancelled')
+      .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate) || a.startTime.localeCompare(b.startTime))
+    if (visible === 'all') return raw
+    return raw.filter(s => visible.includes(s.venueId))
+  }, [today, inTwoWeeks, visible])
 
   return (
     <div style={{ padding: 24 }}>
@@ -46,7 +64,7 @@ export default function SessionsPage() {
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
         <select style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}>
           <option>所有球館</option>
-          {MOCK_VENUES.map(v => <option key={v.id}>{v.name}</option>)}
+          {listVenues().map(v => <option key={v.id}>{v.name}</option>)}
         </select>
         <select style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}>
           <option>所有類型</option>
@@ -109,7 +127,12 @@ export default function SessionsPage() {
               </div>
 
               <div style={{ textAlign: 'right', minWidth: 60 }}>
-                <div style={{ fontSize: 15, fontWeight: 700 }}>${session.price}</div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>
+                  ${session.courtFee}
+                  {session.acEnabled && session.acFee > 0 && (
+                    <span style={{ fontSize: 11, color: '#3b82f6', marginLeft: 4 }}>+${session.acFee}冷</span>
+                  )}
+                </div>
                 <div style={{ fontSize: 11, color: '#aaa' }}>/ 人</div>
               </div>
 

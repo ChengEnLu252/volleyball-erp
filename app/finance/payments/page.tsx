@@ -1,9 +1,24 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { listVenues, getCurrentVisibleVenueIds } from '@/data/api'
+import { useStoreSync } from '@/data/store'
 
 export default function ExportPage() {
   const [exporting, setExporting] = useState<string | null>(null)
+
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+
+  const venues = useMemo(() => {
+    const all = listVenues().filter(v => v.isActive)
+    if (visible === 'all') return all
+    return all.filter(v => visible.includes(v.id))
+  }, [visible])
 
   function mockExport(type: string) {
     setExporting(type)
@@ -35,8 +50,8 @@ export default function ExportPage() {
             <div>
               <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>球館</div>
               <select style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', fontSize: 13 }}>
-                <option>所有球館</option>
-                {['球魔方','Ace','飛翼','日日','Playone'].map(v => <option key={v}>{v}</option>)}
+                {visible === 'all' && <option>所有球館</option>}
+                {venues.map(v => <option key={v.id}>{v.name}</option>)}
               </select>
             </div>
             <div>

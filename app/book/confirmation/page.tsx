@@ -2,7 +2,7 @@
 
 import { useSearchParams } from 'next/navigation'
 import { Suspense } from 'react'
-import { VENUE_BY_SLUG } from '@/data/mock'
+import { getVenueBySlug } from '@/data/api'
 
 function ConfirmationContent() {
   const params = useSearchParams()
@@ -11,7 +11,7 @@ function ConfirmationContent() {
   const method   = params.get('method')  ?? 'cash'
   const waitlist = params.get('waitlist') === 'true'
 
-  const venueInfo = VENUE_BY_SLUG[venue]
+  const venueInfo = getVenueBySlug(venue)
   const code = `VB${Date.now().toString().slice(-6)}`
 
   return (

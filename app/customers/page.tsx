@@ -1,6 +1,8 @@
 'use client'
 
-import { MOCK_CUSTOMERS } from '@/data/mock'
+import { listCustomers, listRegistrations, listSessions, getCurrentVisibleVenueIds } from '@/data/api'
+import { useStoreSync } from '@/data/store'
+import { useEffect, useMemo, useState } from 'react'
 
 const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'E':  { bg: '#f1f5f9', text: '#64748b' },
@@ -24,20 +26,64 @@ const NET_LABEL: Record<string, string> = {
   male: '男網', female: '女網', adjustable: '可調',
 }
 
-const MOCK_STATS: Record<string, { sessions: number; amount: number; lastVisit: string }> = {
-  c1:  { sessions: 48, amount: 12000, lastVisit: '今日' },
-  c2:  { sessions: 6,  amount: 1200,  lastVisit: '3天前' },
-  c3:  { sessions: 92, amount: 25760, lastVisit: '今日' },
-  c4:  { sessions: 12, amount: 2400,  lastVisit: '1週前' },
-  c5:  { sessions: 67, amount: 16750, lastVisit: '今日' },
-  c6:  { sessions: 130,amount: 39000, lastVisit: '2天前' },
-  c7:  { sessions: 44, amount: 11000, lastVisit: '今日' },
-  c8:  { sessions: 115,amount: 32200, lastVisit: '昨日' },
-  c9:  { sessions: 3,  amount: 600,   lastVisit: '2週前' },
-  c10: { sessions: 29, amount: 7250,  lastVisit: '昨日' },
+function formatRelativeDate(dateStr: string | null): string {
+  if (!dateStr) return '—'
+  const today = new Date(); today.setHours(0,0,0,0)
+  const target = new Date(dateStr + 'T00:00:00Z')
+  const days = Math.floor((today.getTime() - target.getTime()) / (24 * 60 * 60 * 1000))
+  if (days <= 0) return '今日'
+  if (days === 1) return '昨日'
+  if (days < 7)   return `${days}天前`
+  if (days < 14)  return '1週前'
+  if (days < 60)  return `${Math.floor(days / 7)}週前`
+  return `${Math.floor(days / 30)}月前`
 }
 
 export default function CustomersPage() {
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+
+  // 客戶本身沒綁館 — 過濾條件：有 registration 在 visible venue 的 session
+  const customers = useMemo(() => {
+    const all = listCustomers()
+    if (visible === 'all') return all
+    const visibleSessionIds = new Set(
+      listSessions()
+        .filter(s => visible.includes(s.venueId))
+        .map(s => s.id),
+    )
+    const visibleCustomerIds = new Set(
+      listRegistrations()
+        .filter(r => visibleSessionIds.has(r.sessionId))
+        .map(r => r.customerId),
+    )
+    return all.filter(c => visibleCustomerIds.has(c.id))
+  }, [visible])
+
+  const stats = useMemo(() => {
+    const allRegs = listRegistrations()
+    const sessionMap = new Map(listSessions().map(s => [s.id, s]))
+    const m = new Map<string, { sessions: number; amount: number; lastVisit: string }>()
+    for (const c of customers) {
+      const myRegs = allRegs.filter(r => r.customerId === c.id && r.status === 'attended')
+      const lastDate = myRegs
+        .map(r => sessionMap.get(r.sessionId)?.sessionDate ?? '')
+        .filter(Boolean)
+        .sort()
+        .pop() ?? null
+      m.set(c.id, {
+        sessions: myRegs.length,
+        amount: myRegs.reduce((s, r) => s + (r.paidAmount ?? 0), 0),
+        lastVisit: formatRelativeDate(lastDate),
+      })
+    }
+    return m
+  }, [customers])
+
   return (
     <div style={{ padding: 24 }}>
       <style>{`@media(max-width:768px){.cust-wrap{padding-top:64px !important}}`}</style>
@@ -46,7 +92,7 @@ export default function CustomersPage() {
         <div style={{ marginBottom: 20, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>客戶資料</h1>
-            <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>共 {MOCK_CUSTOMERS.length} 位客戶</p>
+            <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>共 {customers.length} 位客戶</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <input placeholder="搜尋姓名或電話..." style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', fontSize: 13, width: 200, outline: 'none' }} />
@@ -62,8 +108,8 @@ export default function CustomersPage() {
             <div>客戶</div><div>程度</div><div>偏好網高</div><div style={{ textAlign: 'right' }}>參與場次</div><div style={{ textAlign: 'right' }}>累計消費</div><div style={{ textAlign: 'right' }}>最近參加</div>
           </div>
 
-          {MOCK_CUSTOMERS.map(c => {
-            const stat = MOCK_STATS[c.id]
+          {customers.map(c => {
+            const stat = stats.get(c.id) ?? { sessions: 0, amount: 0, lastVisit: '—' }
             return (
               <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px 80px 100px', padding: '14px 20px', borderTop: '1px solid #f5f4f0', alignItems: 'center', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

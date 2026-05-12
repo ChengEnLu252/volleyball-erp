@@ -1,8 +1,44 @@
-import { getDashboard } from '@/data/mock'
-import AiSection from '@/components/AiSection'
+'use client'
 
-export default async function DashboardPage() {
-  const data = await getDashboard()
+import { useEffect, useState } from 'react'
+import {
+  getAiInsights, getCurrentVisibleVenueIds,
+  getFilteredDashboard, getFilteredDashboardStats,
+  type DashboardStats,
+} from '@/data/api'
+import { hydrateStore, useStoreSync } from '@/data/store'
+import AiSection from '@/components/AiSection'
+import type { DashboardData } from '@/types'
+
+export default function DashboardPage() {
+  useStoreSync()
+
+  // SSR-safe mount flag — server render 用全館 owner 視角；
+  // client mount 後才會根據 currentUser 過濾
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => {
+    hydrateStore()
+    setMounted(true)
+  }, [])
+
+  // 依目前 user 的可見 venue 集合決定資料
+  const visible = mounted ? getCurrentVisibleVenueIds() : 'all'
+
+  const data: DashboardData    = getFilteredDashboard(visible)
+  const stats: DashboardStats  = getFilteredDashboardStats(visible)
+  const insights               = getAiInsights()
+
+  // 「↑ 較昨日 +X.X%」/「↓ 較昨日 -X.X%」
+  const delta = stats.revenueDelta.deltaPercent
+  const deltaSign = delta > 0 ? '↑' : delta < 0 ? '↓' : '→'
+  const deltaSub  = stats.revenueDelta.prev === 0
+    ? '昨日無營收資料'
+    : `${deltaSign} 較昨日 ${delta > 0 ? '+' : ''}${delta}%`
+
+  // 視角 label — 給 dashboard title 用（manager 視角顯示「飛翼館今日總覽」）
+  const titleSuffix = visible === 'all' || visible.length !== 1
+    ? '今日總覽'
+    : `${data.venues[0]?.venueName ?? ''} 今日總覽`
 
   return (
     <div style={{ padding: '16px' }}>
@@ -17,21 +53,21 @@ export default async function DashboardPage() {
 
       <div className="dash-wrap" style={{ paddingTop: 0 }}>
         <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>今日總覽</h1>
+          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>{titleSuffix}</h1>
           <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>
             {new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
           </p>
         </div>
 
         <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-          <StatCard label="今日總收入"   value={`$${data.totalRevenue.toLocaleString()}`} sub="↑ 較昨日 +8.3%"   accent="#d4a843" />
-          <StatCard label="今日出席人次" value={`${data.totalPlayers} 人`}                sub="滿場率 72%"        accent="#2563eb" />
-          <StatCard label="進行中場次"   value={`${data.totalSessions} 場`}               sub="共 5 館"           accent="#059669" />
-          <StatCard label="未付款人數"   value={`${data.totalUnpaid} 人`}                 sub={`待收 $${data.venues.reduce((s,v) => s + v.unpaidAmount, 0).toLocaleString()}`} accent="#e85d3a" />
+          <StatCard label="今日總收入"   value={`$${stats.totalRevenue.toLocaleString()}`} sub={deltaSub}                          accent="#d4a843" />
+          <StatCard label="今日出席人次" value={`${stats.totalPlayers} 人`}                sub={`滿場率 ${stats.fillRate}%`}        accent="#2563eb" />
+          <StatCard label="進行中場次"   value={`${stats.totalSessions} 場`}               sub={`共 ${stats.activeVenueCount} 館`}  accent="#059669" />
+          <StatCard label="未付款人數"   value={`${stats.totalUnpaid} 人`}                 sub={`待收 $${stats.totalUnpaidAmount.toLocaleString()}`} accent="#e85d3a" />
         </div>
 
         <div className="main-grid" style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 12, marginBottom: 12 }}>
-          <Panel title="各館即時狀況">
+          <Panel title={visible === 'all' ? '各館即時狀況' : '本館即時狀況'}>
             {data.venues.map(venue => (
               <div key={venue.venueId} style={{
                 display: 'flex', alignItems: 'center', gap: 10,
@@ -49,6 +85,11 @@ export default async function DashboardPage() {
                 )}
               </div>
             ))}
+            {data.venues.length === 0 && (
+              <div style={{ padding: 20, textAlign: 'center', color: '#888', fontSize: 13 }}>
+                您的館今日無資料
+              </div>
+            )}
           </Panel>
 
           <Panel title={`異常通知 (${data.alerts.length})`}>
@@ -58,10 +99,13 @@ export default async function DashboardPage() {
                 <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5 }}>{alert.message}</div>
               </div>
             ))}
+            {data.alerts.length === 0 && (
+              <div style={{ padding: 12, textAlign: 'center', color: '#888', fontSize: 12 }}>無異常</div>
+            )}
           </Panel>
         </div>
 
-        <Panel title={`未付款名單（待收 $${data.venues.reduce((s,v) => s + v.unpaidAmount, 0).toLocaleString()}）`}>
+        <Panel title={`未付款名單（待收 $${stats.totalUnpaidAmount.toLocaleString()}）`}>
           <div className="unpaid-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
             {data.unpaidRegistrations.map(r => (
               <div key={r.registrationId} style={{
@@ -84,10 +128,14 @@ export default async function DashboardPage() {
                 </div>
               </div>
             ))}
+            {data.unpaidRegistrations.length === 0 && (
+              <div style={{ padding: 12, textAlign: 'center', color: '#888', fontSize: 13, gridColumn: '1 / -1' }}>無未付款</div>
+            )}
           </div>
         </Panel>
 
-        <AiSection />
+        {/* AI 洞察 — 全館視角才顯示（manager 看到的洞察與自己館無關時混淆）*/}
+        {visible === 'all' && <AiSection insights={insights} />}
       </div>
     </div>
   )

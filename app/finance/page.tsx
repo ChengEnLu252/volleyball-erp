@@ -1,7 +1,9 @@
 'use client'
 
-import { useState } from 'react'
-import { MOCK_VENUE_SUMMARIES } from '@/data/mock'
+import Link from 'next/link'
+import { useEffect, useMemo, useState } from 'react'
+import { listVenueSummaries, getCurrentVisibleVenueIds } from '@/data/api'
+import { useStoreSync } from '@/data/store'
 
 const WEEKLY: { date: string; revenue: number; players: number }[] = [
   { date: '04/08', revenue: 32600, players: 58 },
@@ -25,6 +27,21 @@ const PAYMENT_BREAKDOWN = [
 
 export default function FinancePage() {
   const [period, setPeriod] = useState<'today' | 'week' | 'month'>('week')
+
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+
+  // 視角內的 venue 摘要
+  const summaries = useMemo(() => {
+    const all = listVenueSummaries()
+    if (visible === 'all') return all
+    return all.filter(v => visible.includes(v.venueId))
+  }, [visible])
+
   const totalRevenue = WEEKLY.reduce((s, d) => s + d.revenue, 0)
   const maxRevenue = Math.max(...WEEKLY.map(d => d.revenue))
 
@@ -38,17 +55,27 @@ export default function FinancePage() {
             <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>財務報表</h1>
             <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>收入統計與分析</p>
           </div>
-          <div style={{ display: 'flex', gap: 4, background: '#f5f4f0', borderRadius: 10, padding: 4 }}>
-            {(['today', 'week', 'month'] as const).map(p => (
-              <button key={p} onClick={() => setPeriod(p)} style={{
-                padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500,
-                background: period === p ? '#fff' : 'transparent',
-                color: period === p ? '#1a1917' : '#888',
-                boxShadow: period === p ? '0 1px 3px rgba(0,0,0,.08)' : 'none',
-              }}>
-                {p === 'today' ? '今日' : p === 'week' ? '本週' : '本月'}
-              </button>
-            ))}
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <Link href="/reconciliation" style={{
+              padding: '7px 14px', borderRadius: 8,
+              fontSize: 13, fontWeight: 500,
+              background: '#1a1917', color: '#d4a843',
+              textDecoration: 'none', whiteSpace: 'nowrap',
+            }}>
+              💰 進入對帳系統 →
+            </Link>
+            <div style={{ display: 'flex', gap: 4, background: '#f5f4f0', borderRadius: 10, padding: 4 }}>
+              {(['today', 'week', 'month'] as const).map(p => (
+                <button key={p} onClick={() => setPeriod(p)} style={{
+                  padding: '7px 14px', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 500,
+                  background: period === p ? '#fff' : 'transparent',
+                  color: period === p ? '#1a1917' : '#888',
+                  boxShadow: period === p ? '0 1px 3px rgba(0,0,0,.08)' : 'none',
+                }}>
+                  {p === 'today' ? '今日' : p === 'week' ? '本週' : '本月'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
@@ -103,7 +130,7 @@ export default function FinancePage() {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 100px', padding: '10px 20px', background: '#fafaf8', fontSize: 11, color: '#aaa', fontWeight: 500, gap: 12 }}>
             <div>球館</div><div style={{ textAlign: 'right' }}>收入</div><div style={{ textAlign: 'right' }}>人次</div><div style={{ textAlign: 'right' }}>場次</div><div style={{ textAlign: 'right' }}>未收款</div>
           </div>
-          {MOCK_VENUE_SUMMARIES.map(v => (
+          {summaries.map(v => (
             <div key={v.venueId} style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 100px', padding: '14px 20px', borderTop: '1px solid #f5f4f0', alignItems: 'center', gap: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{ width: 10, height: 10, borderRadius: '50%', background: VENUE_COLOR[v.venueId] }} />
@@ -119,10 +146,10 @@ export default function FinancePage() {
           ))}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 100px 80px 80px 100px', padding: '14px 20px', borderTop: '2px solid #e8e6e0', alignItems: 'center', gap: 12, background: '#fafaf8' }}>
             <div style={{ fontSize: 13, fontWeight: 700 }}>合計</div>
-            <div style={{ textAlign: 'right', fontSize: 15, fontWeight: 700 }}>${MOCK_VENUE_SUMMARIES.reduce((s,v)=>s+v.totalRevenue,0).toLocaleString()}</div>
-            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{MOCK_VENUE_SUMMARIES.reduce((s,v)=>s+v.totalPlayers,0)} 人</div>
-            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{MOCK_VENUE_SUMMARIES.reduce((s,v)=>s+v.totalSessions,0)} 場</div>
-            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#e85d3a' }}>${MOCK_VENUE_SUMMARIES.reduce((s,v)=>s+v.unpaidAmount,0).toLocaleString()}</div>
+            <div style={{ textAlign: 'right', fontSize: 15, fontWeight: 700 }}>${summaries.reduce((s,v)=>s+v.totalRevenue,0).toLocaleString()}</div>
+            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{summaries.reduce((s,v)=>s+v.totalPlayers,0)} 人</div>
+            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700 }}>{summaries.reduce((s,v)=>s+v.totalSessions,0)} 場</div>
+            <div style={{ textAlign: 'right', fontSize: 13, fontWeight: 700, color: '#e85d3a' }}>${summaries.reduce((s,v)=>s+v.unpaidAmount,0).toLocaleString()}</div>
           </div>
         </div>
 

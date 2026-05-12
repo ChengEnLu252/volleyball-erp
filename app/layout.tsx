@@ -1,6 +1,8 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import Sidebar from '@/components/Sidebar'
+import ImpersonationBanner from '@/components/ImpersonationBanner'
+import LayoutGuard from '@/components/LayoutGuard'
 
 export const metadata: Metadata = {
   title: 'VolleyOps',
@@ -13,7 +15,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <div style={{ display: 'flex', minHeight: '100vh' }}>
           <Sidebar />
           <main style={{ flex: 1, overflow: 'auto' }}>
-            {children}
+            <ImpersonationBanner />
+            <LayoutGuard>{children}</LayoutGuard>
           </main>
         </div>
       </body>

@@ -1,6 +1,12 @@
 // ================================================================
 // Prisma Schema — 排球場館管理系統
-// 對應先前設計的 PostgreSQL schema
+// ----------------------------------------------------------------
+// 此 schema 與 types/index.ts 完全對齊（截至 Milestone 1.4）。
+// 兩者出現差異時，以 types/index.ts 為主 — 因為應用程式直接消費它。
+//
+// 何時更新此檔：階段 5+（接 PostgreSQL 的時候）。
+// 階段 1-4 demo 期間，所有資料來源在 data/api.ts，並未使用 prisma。
+//
 // 執行：npx prisma db push（開發）或 npx prisma migrate dev
 // ================================================================
 
@@ -12,6 +18,11 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+
+// ================================================================
+// 一、基礎主檔
+// ================================================================
 
 // ── 球館 ──────────────────────────────────────────────────────────
 
@@ -25,6 +36,7 @@ model Venue {
 
   // 關聯
   userVenueRoles      UserVenueRole[]
+  timeslots           Timeslot[]
   sessions            Session[]
   products            Product[]
   productTransactions ProductTransaction[]
@@ -33,7 +45,8 @@ model Venue {
   @@map("venues")
 }
 
-// ── 系統使用者（操作人員）────────────────────────────────────────
+
+// ── 系統使用者（操作人員）─────────────────────────────────────────
 
 model User {
   id           String     @id @default(uuid())
@@ -61,6 +74,7 @@ enum GlobalRole {
   staff
 }
 
+
 // ── 使用者與球館角色對應 ──────────────────────────────────────────
 
 model UserVenueRole {
@@ -82,70 +96,215 @@ enum VenueRole {
   staff
 }
 
+
 // ── 客戶主檔 ──────────────────────────────────────────────────────
 
 model Customer {
-  id                  String      @id @default(uuid())
-  name                String      @db.VarChar(100)
-  phone               String?     @unique @db.VarChar(20)
-  email               String?     @db.VarChar(255)
-  skillLevel          SkillLevel? @map("skill_level")
-  preferredNetHeight  String?     @map("preferred_net_height") @db.VarChar(20)
-  notes               String?
-  isBanned            Boolean     @default(false) @map("is_banned")
-  createdAt           DateTime    @default(now()) @map("created_at")
+  id                 String      @id @default(uuid())
+  name               String      @db.VarChar(100)
+  phone              String?     @unique @db.VarChar(20)
+  email              String?     @db.VarChar(255)
+  skillLevel         SkillLevel? @map("skill_level")
+  preferredNetHeight NetHeight?  @map("preferred_net_height")
+  notes              String?
+  isBanned           Boolean     @default(false) @map("is_banned")
+  createdAt          DateTime    @default(now()) @map("created_at")
 
   // 關聯
   registrations       Registration[]
   productTransactions ProductTransaction[]
+  /** 此客戶擔任主揪的所有季租單 */
+  captainSeasonRentals SeasonRental[]
 
   @@map("customers")
 }
 
+/// 排球程度評級。
+/// + 與 * 在 PostgreSQL enum 中不合法，所以用底線版本，
+/// 透過 @map 對應到實際儲存值。
 enum SkillLevel {
-  beginner
-  elementary
-  intermediate
-  advanced
-  expert
+  E
+  D
+  C
+  B
+  B_PLUS @map("B+")
+  A
+  A_PLUS @map("A+")
+  S
+  S_STAR @map("S*")
 }
 
-// ── 場次 ──────────────────────────────────────────────────────────
+/// 網高 — 男網/女網/可調式
+enum NetHeight {
+  female
+  male
+  adjustable
+}
+
+
+// ================================================================
+// 二、季制相關（階段 1.1 新增）
+// ================================================================
+
+// ── 季 ───────────────────────────────────────────────────────────
+// 12 週為一單位的營運區段。同時間應只有一個 isActive=true 的 Season。
+
+model Season {
+  id        String   @id @default(uuid())
+  name      String   @db.VarChar(100)               // 例：「2026 春季」
+  startDate DateTime @map("start_date") @db.Date
+  endDate   DateTime @map("end_date") @db.Date
+  numWeeks  Int      @default(12) @map("num_weeks")
+  isActive  Boolean  @default(false) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // 關聯
+  seasonRentals SeasonRental[]
+
+  @@map("seasons")
+}
+
+
+// ── 時段 ─────────────────────────────────────────────────────────
+// 每週重複的某時段（例：飛翼週四 14-17）。
+// 一個 Timeslot 在 Season 期間會產生 numWeeks 個 Session 實例。
+
+model Timeslot {
+  id                      String      @id @default(uuid())
+  venueId                 String      @map("venue_id")
+  label                   String?     @db.VarChar(100)               // 例：「週四晚黃金場」
+  /// 0=週日、1=週一、... 6=週六（與 JS Date.getDay() 一致）
+  dayOfWeek               Int         @map("day_of_week")
+  startTime               String      @map("start_time") @db.VarChar(5)   // "14:00"
+  endTime                 String      @map("end_time") @db.VarChar(5)
+  court                   String?     @db.VarChar(50)
+  defaultNetHeight        NetHeight   @map("default_net_height")
+  defaultSessionType      SessionType @map("default_session_type")
+  defaultMinSkillRequired SkillLevel? @map("default_min_skill_required")
+  defaultMaxSkillAllowed  SkillLevel? @map("default_max_skill_allowed")
+  defaultMaxCapacity      Int         @default(18) @map("default_max_capacity")
+  /// 預設球費（元）— 建立 Session 時複製到 Session.courtFee。
+  /// 冷氣費沒有預設值，必須每場手動輸入。
+  defaultCourtFee         Int         @map("default_court_fee")
+  /// 由老闆手動標記是否為熱門時段（影響館長績效計算）
+  isHotZone               Boolean     @default(false) @map("is_hot_zone")
+  isActive                Boolean     @default(true) @map("is_active")
+  createdAt               DateTime    @default(now()) @map("created_at")
+  updatedAt               DateTime    @updatedAt @map("updated_at")
+
+  // 關聯
+  venue          Venue          @relation(fields: [venueId], references: [id])
+  sessions       Session[]
+  seasonRentals  SeasonRental[]
+
+  @@index([venueId, dayOfWeek])
+  @@map("timeslots")
+}
+
+
+// ── 季租單 ───────────────────────────────────────────────────────
+// 主揪（= 某 Customer）季初一次性包下某 Timeslot 整季 18 人份的承諾。
+// 主揪不是 User／不在權限系統內，僅靠 accessToken 取得有限存取。
+
+model SeasonRental {
+  id                   String              @id @default(uuid())
+  timeslotId           String              @map("timeslot_id")
+  seasonId             String              @map("season_id")
+  /// 主揪 = 某 Customer 的 id。不在 User 表，故指向 Customer。
+  captainId            String              @map("captain_id")
+  /// 每場應收（元）— 通常 = courtFee × 18。建立時鎖定。
+  pricePerSession      Int                 @map("price_per_session")
+  /// 季初一次性應收（元）= pricePerSession × 預期場次數
+  totalAmount          Int                 @map("total_amount")
+  /// 主揪實際繳交給館方的金額（理想 = totalAmount）
+  paidAmount           Int                 @default(0) @map("paid_amount")
+  /// 主揪登入用的一次性 token；過期後失效
+  accessToken          String              @unique @map("access_token") @db.VarChar(64)
+  accessTokenExpiresAt DateTime            @map("access_token_expires_at")
+  status               SeasonRentalStatus  @default(pending)
+  notes                String?
+  createdAt            DateTime            @default(now()) @map("created_at")
+  updatedAt            DateTime            @updatedAt @map("updated_at")
+
+  // 關聯
+  timeslot Timeslot  @relation(fields: [timeslotId], references: [id])
+  season   Season    @relation(fields: [seasonId], references: [id])
+  captain  Customer  @relation(fields: [captainId], references: [id])
+  sessions Session[]
+
+  @@index([timeslotId, seasonId])
+  @@index([captainId])
+  @@map("season_rentals")
+}
+
+enum SeasonRentalStatus {
+  pending
+  active
+  completed
+  cancelled
+}
+
+
+// ================================================================
+// 三、場次與報名
+// ================================================================
+
+// ── 場次 ─────────────────────────────────────────────────────────
 
 model Session {
   id               String        @id @default(uuid())
   venueId          String        @map("venue_id")
+  /// 母時段 — 有值表示是 Timeslot 的某週實例；null 表示臨時加開
+  timeslotId       String?       @map("timeslot_id")
+  /// 對應的季租單 — 有值表示季打人員不另外付費
+  seasonRentalId   String?       @map("season_rental_id")
   createdBy        String        @map("created_by")
   sessionDate      DateTime      @map("session_date") @db.Date
   startTime        String        @map("start_time") @db.VarChar(5)   // "09:00"
   endTime          String        @map("end_time") @db.VarChar(5)
   court            String?       @db.VarChar(50)
-  netHeight        String        @map("net_height") @db.VarChar(20)
+  netHeight        NetHeight     @map("net_height")
   sessionType      SessionType   @map("session_type")
-  price            Int                                                // 元
+  /// 球費（元）— 每位臨打應收的基本費用。季打人員不付（已於季初收齊）
+  courtFee         Int           @map("court_fee")
+  /// 冷氣費（元）— 若 acEnabled=true，每位臨打額外應收。
+  /// 無預設值，由開場員每場手動輸入（避免「習慣性收費」）
+  acFee            Int           @default(0) @map("ac_fee")
+  /// 此場是否實際開冷氣
+  acEnabled        Boolean       @default(false) @map("ac_enabled")
   maxCapacity      Int           @map("max_capacity")
   minSkillRequired SkillLevel?   @map("min_skill_required")
   maxSkillAllowed  SkillLevel?   @map("max_skill_allowed")
   status           SessionStatus @default(open)
+  /// 無人場次（無工讀生駐場）— 客戶必須線上報名 + 自助回報已付款
+  isUnattended     Boolean       @default(false) @map("is_unattended")
   notes            String?
   createdAt        DateTime      @default(now()) @map("created_at")
   updatedAt        DateTime      @updatedAt @map("updated_at")
 
   // 關聯
   venue               Venue                @relation(fields: [venueId], references: [id])
+  timeslot            Timeslot?            @relation(fields: [timeslotId], references: [id])
+  seasonRental        SeasonRental?        @relation(fields: [seasonRentalId], references: [id])
   creator             User                 @relation(fields: [createdBy], references: [id])
   registrations       Registration[]
   productTransactions ProductTransaction[]
 
   @@index([venueId, sessionDate])
+  @@index([timeslotId])
+  @@index([seasonRentalId])
   @@map("sessions")
 }
 
+/// 場次類型 — 男網/女網 + 純男/混排/專位 + 包場
 enum SessionType {
-  beginner
-  intermediate
-  advanced
-  mixed
+  male_only
+  male_mixed
+  male_position
+  female_only
+  female_mixed
+  female_position
+  rental
 }
 
 enum SessionStatus {
@@ -155,21 +314,36 @@ enum SessionStatus {
   completed
 }
 
-// ── 報名 ──────────────────────────────────────────────────────────
+
+// ── 報名 ─────────────────────────────────────────────────────────
 
 model Registration {
-  id           String             @id @default(uuid())
-  sessionId    String             @map("session_id")
-  customerId   String             @map("customer_id")
-  registeredBy String             @map("registered_by")
-  status       RegistrationStatus @default(registered)
-  notes        String?
-  registeredAt DateTime           @default(now()) @map("registered_at")
+  id                  String              @id @default(uuid())
+  sessionId           String              @map("session_id")
+  customerId          String              @map("customer_id")
+  /// 報名類型 — 影響應收金額計算
+  type                RegistrationType
+  /// 操作員 — null 表示由 captain 或 self 建立（搭配 registeredBySource 識別）
+  registeredBy        String?             @map("registered_by")
+  /// 來源 — 區分「館長/工讀生」、「主揪」、「客戶自助」
+  registeredBySource  RegistrationSource  @map("registered_by_source")
+  status              RegistrationStatus  @default(registered)
+  notes               String?
+  registeredAt        DateTime            @default(now()) @map("registered_at")
+
+  // ── 自助回報付款（僅無人場次使用）──────────────────────────
+  /// 客戶在系統按下「我已付款」
+  selfReportedPaid    Boolean             @default(false) @map("self_reported_paid")
+  /// 自助付款方式（cash 投錢箱 / transfer 轉帳 / online 線上付款）
+  selfPaymentMethod   PaymentMethod?      @map("self_payment_method")
+  /// 自助付款憑證 URL 或檔名（轉帳必填，投錢箱通常 null）
+  selfPaymentEvidence String?             @map("self_payment_evidence")
+  selfReportedAt      DateTime?           @map("self_reported_at")
 
   // 關聯
   session  Session   @relation(fields: [sessionId], references: [id])
   customer Customer  @relation(fields: [customerId], references: [id])
-  operator User      @relation(fields: [registeredBy], references: [id])
+  operator User?     @relation(fields: [registeredBy], references: [id])
   payments Payment[]
 
   @@unique([sessionId, customerId])
@@ -185,7 +359,28 @@ enum RegistrationStatus {
   attended
 }
 
-// ── 付款記錄 ──────────────────────────────────────────────────────
+/// 報名類型
+/// - season_player：在 SeasonRental 範圍內（不另外收費）
+/// - season_substitute：季打請假時的補位（要付費）
+/// - walk_in：散客（要付費）
+enum RegistrationType {
+  season_player
+  season_substitute
+  walk_in
+}
+
+/// 報名來源
+/// - staff：館長 / 工讀生代為報名
+/// - captain：主揪用 token 加入臨打
+/// - self：客戶在無人場次自助報名
+enum RegistrationSource {
+  staff
+  captain
+  self
+}
+
+
+// ── 付款記錄 ─────────────────────────────────────────────────────
 
 model Payment {
   id             String        @id @default(uuid())
@@ -214,20 +409,27 @@ enum PaymentStatus {
   paid
   partial
   refunded
+  unpaid
 }
 
-// ── 商品主檔 ──────────────────────────────────────────────────────
+
+// ================================================================
+// 四、商品與庫存
+// ================================================================
+
+// ── 商品主檔 ─────────────────────────────────────────────────────
 
 model Product {
-  id                 String   @id @default(uuid())
-  venueId            String?  @map("venue_id")   // null = 全館共用
-  name               String   @db.VarChar(100)
-  sku                String?  @db.VarChar(50)
-  unitPrice          Int      @map("unit_price")
-  currentStock       Int      @default(0) @map("current_stock")
-  lowStockThreshold  Int      @default(5) @map("low_stock_threshold")
-  isActive           Boolean  @default(true) @map("is_active")
-  createdAt          DateTime @default(now()) @map("created_at")
+  id                String   @id @default(uuid())
+  /// null = 全館共用；有值 = 該館限定
+  venueId           String?  @map("venue_id")
+  name              String   @db.VarChar(100)
+  sku               String?  @db.VarChar(50)
+  unitPrice         Int      @map("unit_price")
+  currentStock      Int      @default(0) @map("current_stock")
+  lowStockThreshold Int      @default(5) @map("low_stock_threshold")
+  isActive          Boolean  @default(true) @map("is_active")
+  createdAt         DateTime @default(now()) @map("created_at")
 
   // 關聯
   venue        Venue?               @relation(fields: [venueId], references: [id])
@@ -236,7 +438,8 @@ model Product {
   @@map("products")
 }
 
-// ── 商品流向（販售 / 贈送 / 進貨 / 調整）────────────────────────
+
+// ── 商品流向（販售 / 贈送 / 進貨 / 調整）──────────────────────────
 
 model ProductTransaction {
   id          String                 @id @default(uuid())
@@ -244,7 +447,8 @@ model ProductTransaction {
   venueId     String                 @map("venue_id")
   operatedBy  String                 @map("operated_by")
   type        ProductTransactionType
-  quantity    Int                    // 正數=增加，負數=減少
+  /// 正數=增加，負數=減少
+  quantity    Int
   unitPrice   Int?                   @map("unit_price")
   totalAmount Int?                   @map("total_amount")
   customerId  String?                @map("customer_id")
@@ -271,18 +475,25 @@ enum ProductTransactionType {
   adjustment
 }
 
-// ── Audit Log ─────────────────────────────────────────────────────
+
+// ================================================================
+// 五、系統表
+// ================================================================
+
+// ── Audit Log ────────────────────────────────────────────────────
+// 系統內所有關鍵動作的稽核軌跡。
 
 model AuditLog {
-  id         String   @id @default(uuid())
-  userId     String?  @map("user_id")
-  action     String   @db.VarChar(50)
-  entityType String   @map("entity_type") @db.VarChar(50)
-  entityId   String?  @map("entity_id")
-  oldValues  Json?    @map("old_values")
-  newValues  Json?    @map("new_values")
-  ipAddress  String?  @map("ip_address") @db.VarChar(45)
-  createdAt  DateTime @default(now()) @map("created_at")
+  id         String      @id @default(uuid())
+  /// 主揪 / 自助操作時 userId 可為 null，從 newValues 找出實際操作者
+  userId     String?     @map("user_id")
+  action     AuditAction
+  entityType String      @map("entity_type") @db.VarChar(50)
+  entityId   String?     @map("entity_id")
+  oldValues  Json?       @map("old_values")
+  newValues  Json?       @map("new_values")
+  ipAddress  String?     @map("ip_address") @db.VarChar(45)
+  createdAt  DateTime    @default(now()) @map("created_at")
 
   // 關聯
   user User? @relation(fields: [userId], references: [id])
@@ -292,16 +503,40 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// ── 異常警報 ──────────────────────────────────────────────────────
+enum AuditAction {
+  // 既有
+  CREATE_REGISTRATION
+  CANCEL_REGISTRATION
+  UPDATE_PAYMENT
+  ADD_PAYMENT
+  ADD_PRODUCT_SALE
+  ADD_PRODUCT_GIFT
+  ADJUST_STOCK
+  UPDATE_SESSION
+  CANCEL_SESSION
+  // 階段 1.1 新增：主揪相關
+  CAPTAIN_LOGIN
+  MARK_ATTENDANCE_BY_CAPTAIN
+  ADD_WALKIN_BY_CAPTAIN
+  // 階段 1.1 新增：自助回報
+  SELF_PAYMENT_REPORT
+  // 階段 1.1 新增：季租單
+  CREATE_SEASON_RENTAL
+  UPDATE_SEASON_RENTAL
+  CANCEL_SEASON_RENTAL
+}
+
+
+// ── 異常警報 ─────────────────────────────────────────────────────
 
 model AnomalyAlert {
-  id        String     @id @default(uuid())
-  venueId   String     @map("venue_id")
+  id        String         @id @default(uuid())
+  venueId   String         @map("venue_id")
   type      AlertType
-  level     AlertLevel
+  severity  AlertSeverity
   message   String
-  isRead    Boolean    @default(false) @map("is_read")
-  createdAt DateTime   @default(now()) @map("created_at")
+  isRead    Boolean        @default(false) @map("is_read")
+  createdAt DateTime       @default(now()) @map("created_at")
 
   // 關聯
   venue Venue @relation(fields: [venueId], references: [id])
@@ -313,12 +548,11 @@ enum AlertType {
   gift_ratio
   revenue_drop
   low_stock
-  unpaid
-  registration_drop
+  unpaid_excess
+  signup_drop
 }
 
-enum AlertLevel {
-  high
-  medium
-  low
+enum AlertSeverity {
+  warning
+  critical
 }

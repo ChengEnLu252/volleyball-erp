@@ -1,7 +1,7 @@
 'use client'
 
 import { use } from 'react'
-import { VENUE_BY_SLUG, MOCK_PUBLIC_SESSIONS } from '@/data/mock'
+import { getVenueBySlug, listPublicSessions } from '@/data/api'
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
   male_only: '男網純男', male_mixed: '男網混排', male_position: '男網專位',
@@ -26,10 +26,10 @@ function formatDate(dateStr: string) {
 
 export default function VenueBookPage({ params }: { params: Promise<{ venue: string }> }) {
   const { venue } = use(params)
-  const venueInfo = VENUE_BY_SLUG[venue]
+  const venueInfo = getVenueBySlug(venue)
   if (!venueInfo) return <div style={{ padding: 40, textAlign: 'center', color: '#888' }}>找不到此球館</div>
 
-  const sessions = MOCK_PUBLIC_SESSIONS.filter(s => s.venueId === venueInfo.id)
+  const sessions = listPublicSessions(venueInfo.id)
   const grouped = sessions.reduce((acc, s) => {
     if (!acc[s.sessionDate]) acc[s.sessionDate] = []
     acc[s.sessionDate].push(s)

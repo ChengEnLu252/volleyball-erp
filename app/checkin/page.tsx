@@ -1,16 +1,10 @@
 'use client'
 
-import { useState } from 'react'
-import { MOCK_SESSIONS, MOCK_CUSTOMERS } from '@/data/mock'
-
-const MOCK_REGS = [
-  { id: 'r1', customerId: 'c1',  status: 'attended',   paymentStatus: 'paid',   method: 'cash',     amount: 350 },
-  { id: 'r2', customerId: 'c2',  status: 'registered', paymentStatus: 'unpaid', method: 'cash',     amount: 350 },
-  { id: 'r3', customerId: 'c3',  status: 'attended',   paymentStatus: 'paid',   method: 'transfer', amount: 350 },
-  { id: 'r4', customerId: 'c5',  status: 'registered', paymentStatus: 'unpaid', method: 'cash',     amount: 350 },
-  { id: 'r5', customerId: 'c7',  status: 'attended',   paymentStatus: 'paid',   method: 'online',   amount: 350 },
-  { id: 'r6', customerId: 'c8',  status: 'registered', paymentStatus: 'unpaid', method: 'cash',     amount: 350 },
-]
+import { useEffect, useState, useMemo } from 'react'
+import { listSessions, listSessionRegistrations, getCurrentVisibleVenueIds } from '@/data/api'
+import { useStoreSync } from '@/data/store'
+import { REGISTRATION_TYPE_LABEL } from '@/types'
+import type { RegistrationWithCustomer } from '@/data/api'
 
 const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'E':  { bg: '#f1f5f9', text: '#64748b' },
@@ -24,12 +18,68 @@ const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'S*': { bg: '#1a1917', text: '#d4a843' },
 }
 
+const METHOD_LABEL: Record<string, string> = { cash: '現金', transfer: '轉帳', online: '線上' }
+
+/**
+ * 在沒有 URL 帶 sessionId 的情況下，挑「今天人最多的場次」當作
+ * 「現在正在進行的場次」— demo 起來最有戲劇感。
+ *
+ * 視角過濾：manager / staff 只挑自己館的場次。
+ */
+function pickFeaturedSession(visible: string[] | 'all') {
+  const today = new Date().toISOString().split('T')[0]
+  const allToday = listSessions({ date: today })
+  const todaySessions = visible === 'all'
+    ? allToday
+    : allToday.filter(s => visible.includes(s.venueId))
+  if (todaySessions.length > 0) {
+    return todaySessions.reduce((a, b) =>
+      (b.currentCount ?? 0) > (a.currentCount ?? 0) ? b : a)
+  }
+  // fallback：拿任何一個非取消、非未來的場次（也走視角過濾）
+  const allFallback = listSessions().filter(s => s.sessionDate <= today && s.status !== 'cancelled')
+  const fallback = visible === 'all'
+    ? allFallback
+    : allFallback.filter(s => visible.includes(s.venueId))
+  return fallback[fallback.length - 1] ?? (visible === 'all' ? listSessions()[0] : null)
+}
+
+/** 把 RegistrationWithCustomer 轉成 UI 用的 row（含可變的 status/paymentStatus） */
+type RegRow = {
+  id: string
+  customerId: string
+  type: 'season_player' | 'season_substitute' | 'walk_in'
+  status: 'registered' | 'waitlist' | 'cancelled' | 'attended'
+  paymentStatus: 'paid' | 'partial' | 'unpaid' | 'refunded'
+  paymentMethod: 'cash' | 'transfer' | 'online'
+  amount: number
+  customer: RegistrationWithCustomer['customer']
+}
+
 export default function CheckinPage() {
-  const session = MOCK_SESSIONS[1]
-  const [regs, setRegs] = useState(MOCK_REGS.map(r => ({
-    ...r,
-    customer: MOCK_CUSTOMERS.find(c => c.id === r.customerId)!,
-  })))
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+
+  const session = useMemo(() => pickFeaturedSession(visible), [visible])
+  const initialRegs: RegRow[] = useMemo(() => {
+    if (!session) return []
+    return listSessionRegistrations(session.id).map(r => ({
+      id: r.id,
+      customerId: r.customerId,
+      type: r.type,
+      status: r.status,
+      paymentStatus: r.paymentStatus ?? 'unpaid',
+      paymentMethod: r.paymentMethod ?? 'cash',
+      amount: r.expectedAmount ?? 0,
+      customer: r.customer,
+    }))
+  }, [session])
+
+  const [regs, setRegs] = useState<RegRow[]>(initialRegs)
   const [toast, setToast] = useState<string | null>(null)
 
   function showToast(msg: string) {
@@ -54,8 +104,12 @@ export default function CheckinPage() {
     }))
   }
 
+  if (!session) {
+    return <div style={{ padding: 24 }}>目前沒有可顯示的場次。</div>
+  }
+
   const attendedCount = regs.filter(r => r.status === 'attended').length
-  const unpaidCount   = regs.filter(r => r.paymentStatus !== 'paid').length
+  const unpaidCount   = regs.filter(r => r.type !== 'season_player' && r.paymentStatus !== 'paid').length
 
   return (
     <div style={{ padding: 20, maxWidth: 680, margin: '0 auto' }}>
@@ -93,7 +147,7 @@ export default function CheckinPage() {
             <div style={{ fontSize: 11, color: '#888' }}>未收款</div>
           </div>
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 22, fontWeight: 700 }}>{session.maxCapacity - regs.length}</div>
+            <div style={{ fontSize: 22, fontWeight: 700 }}>{Math.max(0, session.maxCapacity - regs.length)}</div>
             <div style={{ fontSize: 11, color: '#888' }}>剩餘名額</div>
           </div>
         </div>
@@ -121,30 +175,39 @@ export default function CheckinPage() {
                 {reg.customer.name[0]}
               </div>
 
-              {/* 姓名 + 程度 */}
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* 姓名 + 程度 + 報名類型 */}
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: 15, fontWeight: 600 }}>{reg.customer.name}</span>
                   {reg.customer.skillLevel && (
                     <span style={{
                       fontSize: 11, padding: '1px 7px', borderRadius: 6,
-                      background: SKILL_COLOR[reg.customer.skillLevel].bg,
-                      color: SKILL_COLOR[reg.customer.skillLevel].text,
+                      background: SKILL_COLOR[reg.customer.skillLevel]?.bg ?? '#f1f5f9',
+                      color: SKILL_COLOR[reg.customer.skillLevel]?.text ?? '#64748b',
                       fontWeight: 600,
                     }}>
                       {reg.customer.skillLevel}
                     </span>
                   )}
+                  <span style={{
+                    fontSize: 10, padding: '1px 6px', borderRadius: 6, fontWeight: 600,
+                    background: reg.type === 'season_player' ? '#dbeafe' : reg.type === 'season_substitute' ? '#fef3c7' : '#f5f4f0',
+                    color:      reg.type === 'season_player' ? '#1e40af' : reg.type === 'season_substitute' ? '#92400e' : '#666',
+                  }}>
+                    {REGISTRATION_TYPE_LABEL[reg.type]}
+                  </span>
                 </div>
                 <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>
-                  {reg.customer.phone} ·{' '}
-                  {reg.method === 'cash' ? '現金' : reg.method === 'transfer' ? '轉帳' : '線上'} ${ reg.amount}
+                  {reg.customer.phone}
+                  {reg.type === 'season_player'
+                    ? ' · 季打免費'
+                    : ` · ${METHOD_LABEL[reg.paymentMethod]} $${reg.amount}`}
                 </div>
               </div>
 
               {/* 操作按鈕 */}
               <div style={{ display: 'flex', gap: 8 }}>
-                {reg.paymentStatus !== 'paid' && (
+                {reg.type !== 'season_player' && reg.paymentStatus !== 'paid' && (
                   <button
                     onClick={() => markPaid(reg.id)}
                     style={{
@@ -156,7 +219,7 @@ export default function CheckinPage() {
                     收款
                   </button>
                 )}
-                {reg.paymentStatus === 'paid' && reg.status !== 'attended' && (
+                {reg.type !== 'season_player' && reg.paymentStatus === 'paid' && reg.status !== 'attended' && (
                   <span style={{ fontSize: 12, color: '#10b981', padding: '8px 4px' }}>✓ 已付款</span>
                 )}
                 <button

@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
-import { MOCK_VENUE_PRODUCTS, MOCK_PRODUCT_TRANSACTIONS } from '@/data/mock'
+import { useEffect, useMemo, useState } from 'react'
+import { listVenueProducts, listProductTransactions, getCurrentVisibleVenueIds } from '@/data/api'
+import { useStoreSync } from '@/data/store'
 
 const TYPE_LABEL: Record<string, string> = {
   purchase_in: '進貨', sale: '販售', gift: '贈送', adjustment: '盤點調整',
@@ -20,13 +21,33 @@ export default function ProductsPage() {
   const [tab, setTab] = useState<'stock' | 'transactions'>('stock')
   const [selectedVenue, setSelectedVenue] = useState<string>('all')
 
-  const allLowStock = MOCK_VENUE_PRODUCTS.flatMap(v =>
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+
+  useEffect(() => {
+    if (visible !== 'all' && selectedVenue !== 'all' && !visible.includes(selectedVenue)) {
+      setSelectedVenue('all')
+    }
+  }, [visible, selectedVenue])
+
+  // 視角內的 venue 商品
+  const venueProducts = useMemo(() => {
+    const all = listVenueProducts()
+    if (visible === 'all') return all
+    return all.filter(v => visible.includes(v.venueId))
+  }, [visible])
+
+  const allLowStock = venueProducts.flatMap(v =>
     v.products.filter(p => p.currentStock <= p.lowStockThreshold).map(p => ({ ...p, venueName: v.venueName, venueId: v.venueId }))
   )
 
   const filteredVenues = selectedVenue === 'all'
-    ? MOCK_VENUE_PRODUCTS
-    : MOCK_VENUE_PRODUCTS.filter(v => v.venueId === selectedVenue)
+    ? venueProducts
+    : venueProducts.filter(v => v.venueId === selectedVenue)
 
   return (
     <div style={{ padding: 24 }}>
@@ -76,7 +97,7 @@ export default function ProductsPage() {
                 color: selectedVenue === 'all' ? '#fff' : '#555',
                 borderColor: selectedVenue === 'all' ? '#1a1917' : '#e8e6e0',
               }}>全部球館</button>
-              {MOCK_VENUE_PRODUCTS.map(v => (
+              {listVenueProducts().map(v => (
                 <button key={v.venueId} onClick={() => setSelectedVenue(v.venueId)} style={{
                   padding: '6px 12px', borderRadius: 8, border: '1px solid', cursor: 'pointer', fontSize: 12, fontWeight: 500,
                   background: selectedVenue === v.venueId ? VENUE_COLOR[v.venueId] : '#fff',
@@ -161,8 +182,10 @@ export default function ProductsPage() {
             <div style={{ display: 'grid', gridTemplateColumns: '80px 80px 1fr 80px 80px 80px 100px', padding: '10px 20px', background: '#fafaf8', fontSize: 11, color: '#aaa', fontWeight: 500, gap: 12 }}>
               <div>時間</div><div>球館</div><div>商品</div><div>類型</div><div style={{ textAlign: 'right' }}>數量</div><div style={{ textAlign: 'right' }}>金額</div><div>操作人員</div>
             </div>
-            {MOCK_PRODUCT_TRANSACTIONS.map(tx => {
-              const venue = MOCK_VENUE_PRODUCTS.find(v => v.venueId === tx.venueId)
+            {listProductTransactions()
+              .filter(tx => visible === 'all' || visible.includes(tx.venueId))
+              .map(tx => {
+              const venue = listVenueProducts().find(v => v.venueId === tx.venueId)
               return (
                 <div key={tx.id} style={{ display: 'grid', gridTemplateColumns: '80px 80px 1fr 80px 80px 80px 100px', padding: '12px 20px', borderTop: '1px solid #f5f4f0', alignItems: 'center', gap: 12 }}>
                   <div style={{ fontSize: 11, color: '#888' }}>{tx.operatedAt.split('T')[1].slice(0,5)}</div>

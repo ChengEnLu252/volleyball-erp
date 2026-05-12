@@ -1,17 +1,16 @@
 'use client'
 
 import { useState } from 'react'
+import type { AiInsight } from '@/data/api'
 
-const AI_SUMMARY = [
-  { icon: '📈', color: '#059669', bg: '#dcfce7', text: '飛翼館本週滿場率達 91%，建議將週五晚場價格從 $280 調升至 $300，預估可增加週收入約 $1,440。' },
-  { icon: '⚠️', color: '#d97706', bg: '#fef3c7', text: '飛翼館今日商品贈送比例 42%，遠超標準值 20%，建議館主確認是否有異常贈送行為。' },
-  { icon: '💡', color: '#2563eb', bg: '#dbeafe', text: 'Ace 館週間離峰時段報名率偏低，建議新增 $200 的 B- 入門場，吸引新客並提升平日收入。' },
-  { icon: '🏐', color: '#7c3aed', bg: '#ede9fe', text: '週末下午 14:00 中階場回流率最高，建議每週固定開設至少 2 場。' },
-]
+type Props = {
+  /** 由 dashboard 透過 getAiInsights() 算出後傳入 */
+  insights: AiInsight[]
+}
 
 type Message = { role: 'user' | 'assistant', content: string }
 
-export default function AiSection() {
+export default function AiSection({ insights }: Props) {
   const [chatOpen, setChatOpen] = useState(false)
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -62,12 +61,18 @@ export default function AiSection() {
           </button>
         </div>
         <div style={{ padding: '12px 16px', display: 'grid', gap: 8 }}>
-          {AI_SUMMARY.map((item, i) => (
-            <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 8, background: item.bg }}>
-              <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
-              <div style={{ fontSize: 13, color: '#333', lineHeight: 1.6 }}>{item.text}</div>
+          {insights.length === 0 ? (
+            <div style={{ padding: '12px', fontSize: 13, color: '#888', textAlign: 'center' }}>
+              目前一切正常，沒有異常觀察。
             </div>
-          ))}
+          ) : (
+            insights.map((item, i) => (
+              <div key={i} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', padding: '10px 12px', borderRadius: 8, background: item.bg }}>
+                <span style={{ fontSize: 16, flexShrink: 0 }}>{item.icon}</span>
+                <div style={{ fontSize: 13, color: '#333', lineHeight: 1.6 }}>{item.text}</div>
+              </div>
+            ))
+          )}
         </div>
       </div>
 
