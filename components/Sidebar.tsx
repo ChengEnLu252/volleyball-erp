@@ -39,6 +39,7 @@ const ALL_LINKS: NavLink[] = [
   { pageKey: 'captains',         href: '/captains',         label: '主揪管理', icon: '🎯' },
   { pageKey: 'finance/payments', href: '/finance/payments', label: '報表匯出', icon: '📤' },
   { pageKey: 'audit',            href: '/audit',            label: '操作紀錄', icon: '🔍' },
+  { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證', icon: '📎' },
   { pageKey: 'integrations',     href: '/integrations',     label: '整合設定', icon: '🔗' },
 ]
 

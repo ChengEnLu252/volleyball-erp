@@ -54,9 +54,21 @@ export default function ProductsPage() {
       <style>{`@media(max-width:768px){.prod-wrap{padding-top:64px !important}}`}</style>
       <div className="prod-wrap" style={{ paddingTop: 0 }}>
 
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>商品管理</h1>
-          <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>各館庫存狀況與商品流向紀錄</p>
+        <div style={{ marginBottom: 20, display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>商品管理</h1>
+            <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>各館庫存狀況與商品流向紀錄</p>
+          </div>
+          <a
+            href="/products/transfers"
+            style={{
+              padding: '8px 14px', borderRadius: 8,
+              background: '#7c6af7', color: '#fff', textDecoration: 'none',
+              fontSize: 13, fontWeight: 600,
+            }}
+          >
+            📦 跨館調貨 →
+          </a>
         </div>
 
         {allLowStock.length > 0 && (

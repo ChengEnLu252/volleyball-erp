@@ -20,6 +20,8 @@
 //    - Registration        加 type、source；加自助回報欄位；
 //                          registeredBy 改為 nullable
 //    - AuditAction         擴充主揪、自助、季租單相關 action
+//                          階段 6 補 PRODUCT_TRANSFER + SEND_SELF_REPORT_REMINDER
+//                          階段 7 拆 PRODUCT_TRANSFER 為 4 個 phase union
 //
 // ➖ 不動：Venue / User / Customer / Payment / Product /
 //        ProductTransaction / AuditLog / Dashboard 彙總型 /
@@ -712,6 +714,12 @@ export interface Product {
   lowStockThreshold: number
   /** 是否上架中 */
   isActive: boolean
+  /**
+   * 是否為「誠實商店」商品（投錢箱、無人販售）— 階段 6 新增。
+   * 預設視為 false；true 表示該商品需納入 `/reconciliation/honest-shop` 對帳。
+   * Optional 以維持與既有 seed/persisted 資料相容（未設視為 false）。
+   */
+  isHonestShop?: boolean
   /** 建立時間 */
   createdAt: Timestamp
 }
@@ -764,6 +772,92 @@ export interface ProductTransaction {
 }
 
 
+// ── 階段 5 衍生 entity（階段 6 從 store.ts 搬入 types） ─────────
+
+/**
+ * 跨館調貨單狀態 — 3 階段 flow（pending → in_transit → completed），
+ * 另有 cancelled 終態。
+ */
+export type ProductTransferStatus =
+  | 'pending'    // 已申請、待出貨館確認
+  | 'in_transit' // 已出貨、待入貨館收件
+  | 'completed'  // 已完成入帳
+  | 'cancelled'  // 已取消
+
+export const PRODUCT_TRANSFER_STATUS_LABEL: Record<ProductTransferStatus, string> = {
+  pending:    '待處理',
+  in_transit: '運送中',
+  completed:  '已完成',
+  cancelled:  '已取消',
+}
+
+/**
+ * 跨館調貨單（階段 5 Block C）— 從 store.ts 搬入 types/index.ts（階段 6）。
+ *
+ * 注意：
+ * - in-memory 持久化（透過 PersistedDiff），不在 generator seed 內。
+ * - 取消已 in_transit 的調貨「不退庫存」（決策 #20）— 需另開逆向調貨補回。
+ */
+export interface ProductTransfer {
+  /** 唯一識別碼 */
+  id: UUID
+  /** 調貨的商品 */
+  productId: UUID
+  /** 來源球館 */
+  fromVenueId: UUID
+  /** 目的球館 */
+  toVenueId: UUID
+  /** 調貨數量（正整數） */
+  quantity: number
+  /** 申請者（User） */
+  requestedBy: UUID
+  /** 目前狀態 */
+  status: ProductTransferStatus
+  /** 申請時間 */
+  requestedAt: Timestamp
+  /** 完成時間（status='completed' 時填入；其他 status 為 null） */
+  completedAt: Timestamp | null
+  /** 備註 */
+  notes: string | null
+}
+
+/**
+ * 誠實商店投錢箱盤點記錄（階段 5 Block B）— 從 store.ts 搬入 types/index.ts（階段 6）。
+ *
+ * 注意：
+ * - in-memory 持久化（透過 PersistedDiff），不在 generator seed 內。
+ * - 盤點當下同步寫一筆 `adjustment` ProductTransaction（決策 #14）。
+ */
+export interface BoxAuditRecord {
+  /** 唯一識別碼 */
+  id: UUID
+  /** 盤點的球館 */
+  venueId: UUID
+  /** 盤點的商品 */
+  productId: UUID
+  /** 盤點時間 */
+  auditedAt: Timestamp
+  /** 盤點期間起始日 */
+  periodStart: string
+  /** 盤點期間結束日 */
+  periodEnd: string
+  /** 帳面銷售金額（期間內該商品 sum sale.totalAmount） */
+  expectedRevenue: number
+  /** 帳面銷售數量 */
+  expectedQuantitySold: number
+  /** 老闆數到的投錢箱實收 */
+  countedCash: number
+  /** 老闆數到的實際庫存 */
+  countedStock: number
+  /** 缺口金額（expectedRevenue − countedCash, 正數 = 短少） */
+  cashDiscrepancy: number
+  /** 執行盤點的老闆（User） */
+  auditedBy: UUID
+  /** 備註 */
+  notes: string | null
+}
+
+
 // ── Audit Log（🔧 擴充） ─────────────────────────────────────
 
 /**
@@ -807,6 +901,32 @@ export type AuditAction =
   | 'UNCANCEL_REGISTRATION'
   /** 館長複製主揪連結（read-like 但仍需稽核）*/
   | 'COPY_CAPTAIN_TOKEN'
+  // ── ✨ 階段 6 新增（補階段 5 留下的技術債）─────
+  /** 老闆對可疑客戶一鍵發自助回報提醒（Block A 自助回報）*/
+  | 'SEND_SELF_REPORT_REMINDER'
+  // ── ✨ 階段 7 新增：跨館調貨 4 個 phase 各自 union member ─
+  // 階段 6 用單一 'PRODUCT_TRANSFER' + newValues.step 區分；階段 7 拆出來
+  // 讓 audit filter 可以單獨篩選「只看出貨」或「只看取消」。
+  // newValues.step 仍然保留（向後相容 + 額外資訊），但已不再是區分依據。
+  /** 跨館調貨：申請（pending） */
+  | 'PRODUCT_TRANSFER_CREATED'
+  /** 跨館調貨：出貨確認（pending → in_transit，扣 from 館庫存） */
+  | 'PRODUCT_TRANSFER_SHIPPED'
+  /** 跨館調貨：收貨確認（in_transit → completed，加 to 館庫存） */
+  | 'PRODUCT_TRANSFER_RECEIVED'
+  /** 跨館調貨：取消（任何狀態 → cancelled） */
+  | 'PRODUCT_TRANSFER_CANCELLED'
+  // ── ✨ 階段 8 新增：上傳憑證 store + 衝突偵測 ───
+  /** 上傳憑證檔（image blob 進 IndexedDB；meta 進 store）*/
+  | 'UPLOAD_EVIDENCE'
+  /** 刪除憑證檔（admin 操作，會同時刪 IndexedDB blob + meta）*/
+  | 'DELETE_EVIDENCE'
+  /**
+   * 樂觀鎖衝突：mutation 帶入的 baseUpdatedAt 與當前 entity.updatedAt 不符。
+   * 此 action 寫進 audit log 時，被擋下的 mutation **沒有**真的執行；
+   * newValues 記錄試圖寫入的 patch、oldValues 記錄當下 entity 的 updatedAt。
+   */
+  | 'CONFLICT_DETECTED'
 
 /**
  * 操作者類型（階段 3 production 升級新增）
@@ -1015,4 +1135,75 @@ export interface RentalSlot {
   totalPrice: number
   status: 'available' | 'pending' | 'booked'
   notes: string | null
+}
+
+
+// ── ✨ 階段 8 新增：上傳憑證 store ─────────────────────────────
+
+/**
+ * 憑證可附在哪些業務實體上。
+ *
+ * 目前只開 'self_payment'（自助回報轉帳截圖）；
+ * 未來可擴：'box_audit' (誠實商店盤點照片) / 'transfer' (調貨簽收單) 等。
+ */
+export type EvidenceSourceType = 'self_payment'
+
+export const EVIDENCE_SOURCE_LABEL: Record<EvidenceSourceType, string> = {
+  self_payment: '自助回報轉帳',
+}
+
+/**
+ * 上傳憑證的 metadata（不含 blob 本體）。
+ *
+ * **資料分流**：blob 進 IndexedDB（key=id）、此 meta 進 PersistedDiff
+ * （隨 localStorage 一起 hydrate）。兩邊用 id 串。
+ *
+ * 為什麼分流？localStorage 對大 string 不友善（5MB ceiling），
+ * 而 IndexedDB 對 Blob 是 native 支援；分流後 meta 可以隨 store
+ * 一起 audit / list 而不污染 hot path。
+ */
+export interface UploadedEvidence {
+  /** evd_xxx 格式，與 IndexedDB blob key 一致 */
+  id: UUID
+  /** 業務來源類型 */
+  sourceType: EvidenceSourceType
+  /** 來源實體 id（例：Registration.id）*/
+  sourceId: UUID
+  /** 原始檔名 */
+  filename: string
+  /** MIME（image/jpeg / image/png 等）*/
+  mimeType: string
+  /** Blob 大小（bytes）*/
+  size: number
+  /** 上傳者顯示名（顧客名或員工名）*/
+  uploadedByName: string
+  /** 上傳時間 ISO */
+  uploadedAt: Timestamp
+  /**
+   * Blob 是否還在 IndexedDB 內。
+   *
+   * 用途：admin 刪除時保留 meta 但標記 false，audit 仍可追蹤；
+   *      也可能因瀏覽器清資料而 meta 在但 blob 不在。
+   */
+  blobAvailable: boolean
+}
+
+/**
+ * 衝突偵測（樂觀鎖）的 mutation 結果。
+ *
+ * 適用於改既有 entity 的 mutation。caller 可在 args 內帶
+ * `baseUpdatedAt`（呼叫時記下的 entity.updatedAt）；server 端
+ * 比對若不符 → return `{ ok: false, conflict: true, ... }` +
+ * 寫 'CONFLICT_DETECTED' audit log；mutation 本身不執行。
+ *
+ * 不傳 baseUpdatedAt 視為「強制覆蓋」（向後相容）。
+ */
+export interface ConflictResult {
+  ok: false
+  conflict: true
+  reason: string
+  /** 當下 entity 的 updatedAt（讓 UI 可顯示「他人於 X 修改過」）*/
+  currentUpdatedAt: Timestamp
+  /** 修改者快照（從最後一筆此 entity 的 audit log 推出，可能 null）*/
+  lastEditedBy?: string | null
 }

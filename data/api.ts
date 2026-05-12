@@ -1760,7 +1760,10 @@ export function adminLogCopyToken(rentalId: string): void {
  * 重發 token：產生新 token + 延長 expiresAt 到本季結束。
  * 舊 token 立即失效（因 SeasonRental.accessToken 直接被覆寫）。
  */
-export function adminRegenerateToken(rentalId: string): { ok: true; newToken: string } | { ok: false; reason: string } {
+export function adminRegenerateToken(
+  rentalId: string,
+  opts: { baseUpdatedAt?: string } = {},
+): { ok: true; newToken: string } | { ok: false; reason: string } | ConflictResult {
   const r = GENERATED.seasonRentals.find(x => x.id === rentalId)
   if (!r) return { ok: false, reason: '找不到季租單' }
 
@@ -1770,6 +1773,17 @@ export function adminRegenerateToken(rentalId: string): { ok: true; newToken: st
   const newExpiresAt = season
     ? `${season.endDate}T23:59:59`
     : new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
+
+  // 階段 8：樂觀鎖檢查（caller 傳 baseUpdatedAt 才啟用；不傳=強制覆蓋向後相容）
+  const conflict = checkBaseUpdatedAt(r, opts.baseUpdatedAt, {
+    entityType: 'SeasonRental',
+    entityId: rentalId,
+    actor: getAdminActor(),
+    venue: r.venueName ?? null,
+    targetLabel: r.captainName ?? '主揪',
+    attemptedPatch: { accessToken: newToken, accessTokenExpiresAt: newExpiresAt },
+  })
+  if (conflict) return conflict
 
   patchSeasonRental(rentalId, {
     accessToken: newToken,
@@ -1791,10 +1805,24 @@ export function adminRegenerateToken(rentalId: string): { ok: true; newToken: st
 }
 
 /** 停用季租單：status: 'active'/'pending' → 'cancelled'  */
-export function adminDeactivateRental(rentalId: string): { ok: true } | { ok: false; reason: string } {
+export function adminDeactivateRental(
+  rentalId: string,
+  opts: { baseUpdatedAt?: string } = {},
+): { ok: true } | { ok: false; reason: string } | ConflictResult {
   const r = GENERATED.seasonRentals.find(x => x.id === rentalId)
   if (!r) return { ok: false, reason: '找不到季租單' }
   if (r.status === 'cancelled') return { ok: false, reason: '此季租單已停用' }
+
+  // 階段 8：樂觀鎖檢查
+  const conflict = checkBaseUpdatedAt(r, opts.baseUpdatedAt, {
+    entityType: 'SeasonRental',
+    entityId: rentalId,
+    actor: getAdminActor(),
+    venue: r.venueName ?? null,
+    targetLabel: r.captainName ?? '主揪',
+    attemptedPatch: { status: 'cancelled' },
+  })
+  if (conflict) return conflict
 
   const oldStatus = r.status
   patchSeasonRental(rentalId, { status: 'cancelled', updatedAt: new Date().toISOString() })
@@ -1909,6 +1937,22 @@ const ADMIN_ACTIONS: ReadonlySet<AuditAction> = new Set<AuditAction>([
   'ADJUST_STOCK',
   'UPDATE_SESSION',
   'CANCEL_SESSION',
+  // 階段 7：跨館調貨 4 個 phase 都是館長動作
+  // （階段 6 的 'PRODUCT_TRANSFER' 漏加進這個 Set，導致 audit page 「館長動作」
+  //   filter 不會包含跨館調貨；階段 7 拆 union 時順手補上）
+  'PRODUCT_TRANSFER_CREATED',
+  'PRODUCT_TRANSFER_SHIPPED',
+  'PRODUCT_TRANSFER_RECEIVED',
+  'PRODUCT_TRANSFER_CANCELLED',
+  // 階段 7 順手補：發回報提醒也是館長動作（階段 6 漏加）
+  'SEND_SELF_REPORT_REMINDER',
+  // 階段 8：上傳憑證 + 刪除憑證 + 衝突偵測
+  // 註：'UPLOAD_EVIDENCE' 可由 captain 觸發（自助回報上傳）；
+  //     此情況因 actorType='captain'，audit category 'captain' 分支會先匹配。
+  //     此處列入 ADMIN_ACTIONS 是為了當 admin 用 admin 身份上傳時也可被歸類。
+  'UPLOAD_EVIDENCE',
+  'DELETE_EVIDENCE',
+  'CONFLICT_DETECTED',
 ])
 
 export interface AuditLogFilter {
@@ -2624,3 +2668,1815 @@ export function getPerformanceOverview(visible: string[] | 'all'): PerformanceOv
   }
 }
 
+
+
+// ════════════════════════════════════════════════════════════
+// 十、無人場次自助回報（階段 5 Block A）
+// ════════════════════════════════════════════════════════════
+// 故事點 5（日日 v4 週一）：場次 isUnattended === true，
+// 客戶在現場按「我已付款」（Registration.selfReportedPaid），
+// 老闆對照「自助回報數 vs 實付筆數 vs 應到人數」抓不誠實。
+// 可疑名單：在最近 60 天無人場次裡，未自助回報的次數 ≥ 3。
+// ────────────────────────────────────────────────────────────
+
+import type { PaymentMethod } from '@/types'
+import {
+  patchRegistrationSelfReport,
+  addProductTransaction as _addProductTransaction_s5,
+  addProductTransfer as _addProductTransfer_s5,
+  patchProductTransfer as _patchProductTransfer_s5,
+  getAllTransfers as _getAllTransfers_s5,
+  PRODUCT_TRANSFER_STATUS_LABEL as _PRODUCT_TRANSFER_STATUS_LABEL_s5,
+  type ProductTransfer as _ProductTransfer_s5,
+  type ProductTransferStatus as _ProductTransferStatus_s5,
+} from './store'
+
+// ── 10.1 常數 ────────────────────────────────────────────────
+
+/** 最近多少天的場次納入統計（可疑名單也用此範圍） */
+const _UNATTENDED_LOOKBACK_DAYS = 60
+
+/** 多少次未自助回報才算「可疑客戶」（凍結，使用者決議 3）*/
+const _SUSPICIOUS_UNREPORTED_THRESHOLD = 3
+
+// ── 10.2 Interfaces ──────────────────────────────────────────
+
+/** 一個無人場次的對照摘要 */
+export interface UnattendedSessionSummary {
+  sessionId: string
+  venueId: string
+  venueName: string
+  sessionDate: string
+  startTime: string
+  endTime: string
+  status: SessionStatus
+  /** 應收（含季打 0、臨打/補位 courtFee+acFee） */
+  expectedRevenue: number
+  /** 實收（Payment 加總）*/
+  actualRevenue: number
+  /** 報名人數（不含請假） */
+  registeredCount: number
+  /** 季打人數（不算應付）*/
+  seasonPlayerCount: number
+  /** 應付人數（registered 中扣掉季打） */
+  payableCount: number
+  /** 已自助回報已付款的人數 */
+  selfReportedCount: number
+  /** 系統有實際 Payment 紀錄的人數（非季打） */
+  actualPaidCount: number
+  /** 自助說已付但系統無 Payment 紀錄 — 信任落差，注意 */
+  reportedButNoPayCount: number
+  /** 系統有 Payment 但未自助回報 — 例如館長補入帳 */
+  paidButNotReportedCount: number
+  /** 缺口金額 = expectedRevenue − actualRevenue */
+  discrepancyAmount: number
+  /** 自助回報率：selfReportedCount / payableCount */
+  selfReportRate: number
+}
+
+/** Drill-down：一場無人場次的所有 Registration（含付款狀況） */
+export interface UnattendedRegistrationRow {
+  registrationId: string
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+  registrationType: 'season_player' | 'season_substitute' | 'walk_in'
+  isPayable: boolean
+  expectedAmount: number
+  selfReportedPaid: boolean
+  selfPaymentMethod: PaymentMethod | null
+  selfPaymentEvidence: string | null
+  selfReportedAt: string | null
+  hasActualPayment: boolean
+  actualPaidAmount: number
+  /** 信任落差 flag：自助說付但實際無 Payment */
+  reportedNoPay: boolean
+  /** 已付但未回報：館長 / 工讀生補登 */
+  paidNotReported: boolean
+}
+
+/** 可疑客戶（在最近無人場次未回報 ≥ 3 次） */
+export interface SuspiciousCustomer {
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+  /** 在 lookback 期間出席的無人場次數（不含請假，扣掉季打）*/
+  unattendedRegistrationsCount: number
+  /** 自助回報過幾次 */
+  selfReportedCount: number
+  /** 未自助回報的次數（核心指標）*/
+  unreportedCount: number
+  /** 累積應付未自助回報的金額 */
+  totalOwedFromUnreported: number
+  /** 最近未回報的場次日期（最多 5）*/
+  recentUnreportedDates: string[]
+  /** 主要去的館 venueId（影響 manager 視角過濾） */
+  primaryVenueId: string
+  primaryVenueName: string
+}
+
+/** /reconciliation/unattended 主頁 overview */
+export interface UnattendedReportOverview {
+  /** 已 hook 進 visible 過濾後的場次列表 */
+  sessions: UnattendedSessionSummary[]
+  /** lookback 內所有場次的應收總額 */
+  totalExpected: number
+  /** lookback 內所有場次的實收總額 */
+  totalActual: number
+  /** 總缺口 */
+  totalDiscrepancy: number
+  /** 自助回報整體比例 */
+  overallSelfReportRate: number
+  /** 信任落差總人次（自助說付但系統無 Payment） */
+  trustGapCount: number
+  /** 可疑客戶列表（已按 visible 過濾） */
+  suspiciousCustomers: SuspiciousCustomer[]
+  /** lookback 天數 */
+  lookbackDays: number
+  /** 可疑門檻次數 */
+  suspiciousThreshold: number
+  /** 是否被 visible 過濾 */
+  isFiltered: boolean
+}
+
+// ── 10.3 內部 helper ─────────────────────────────────────────
+
+function _isUnattendedPayable(reg: Registration): boolean {
+  return reg.type !== 'season_player' && reg.status !== 'cancelled'
+}
+
+function _withinLookback(sessionDate: string): boolean {
+  const cutoff = dateAddDays(TODAY_STR, -_UNATTENDED_LOOKBACK_DAYS)
+  return sessionDate >= cutoff && sessionDate <= TODAY_STR
+}
+
+function _buildUnattendedSessionSummary(session: Session): UnattendedSessionSummary {
+  const venue = GENERATED.venues.find(v => v.id === session.venueId)
+  const regs = GENERATED.registrations.filter(r => r.sessionId === session.id && r.status !== 'cancelled')
+  const payableRegs = regs.filter(r => r.type !== 'season_player')
+  const seasonRegs  = regs.filter(r => r.type === 'season_player')
+
+  let actualRevenue = 0
+  let actualPaidCount = 0
+  let reportedButNoPayCount = 0
+  let paidButNotReportedCount = 0
+  for (const r of payableRegs) {
+    const pays = GENERATED.payments.filter(p => p.registrationId === r.id && p.status === 'paid')
+    const paidAmount = pays.reduce((s, p) => s + p.amount, 0)
+    const hasPay = pays.length > 0
+    actualRevenue += paidAmount
+    if (hasPay) actualPaidCount++
+    if (r.selfReportedPaid && !hasPay) reportedButNoPayCount++
+    if (!r.selfReportedPaid && hasPay) paidButNotReportedCount++
+  }
+
+  const expectedRevenue = payableRegs.reduce((s, r) => s + (r.expectedAmount ?? 0), 0)
+  const selfReportedCount = payableRegs.filter(r => r.selfReportedPaid).length
+  const selfReportRate = payableRegs.length > 0 ? selfReportedCount / payableRegs.length : 0
+
+  return {
+    sessionId: session.id,
+    venueId: session.venueId,
+    venueName: venue?.name ?? '?',
+    sessionDate: session.sessionDate,
+    startTime: session.startTime,
+    endTime: session.endTime,
+    status: session.status,
+    expectedRevenue,
+    actualRevenue,
+    registeredCount: regs.length,
+    seasonPlayerCount: seasonRegs.length,
+    payableCount: payableRegs.length,
+    selfReportedCount,
+    actualPaidCount,
+    reportedButNoPayCount,
+    paidButNotReportedCount,
+    discrepancyAmount: expectedRevenue - actualRevenue,
+    selfReportRate,
+  }
+}
+
+// ── 10.4 公開查詢 ────────────────────────────────────────────
+
+/** 列出 lookback 內所有無人場次（依日期新→舊），可選 visible 過濾 */
+export function listUnattendedSessionSummaries(
+  visible: string[] | 'all' = 'all',
+): UnattendedSessionSummary[] {
+  const ids = visible === 'all' ? null : new Set(visible)
+  return GENERATED.sessions
+    .filter(s => s.isUnattended)
+    .filter(s => _withinLookback(s.sessionDate))
+    .filter(s => !ids || ids.has(s.venueId))
+    .map(_buildUnattendedSessionSummary)
+    .sort((a, b) => (a.sessionDate < b.sessionDate ? 1 : a.sessionDate > b.sessionDate ? -1 : a.startTime < b.startTime ? 1 : -1))
+}
+
+/** Drill-down：取得一場無人場次的所有 Registration 行（含對照） */
+export function getUnattendedSessionDetail(sessionId: string): {
+  summary: UnattendedSessionSummary
+  rows: UnattendedRegistrationRow[]
+} | null {
+  const session = GENERATED.sessions.find(s => s.id === sessionId)
+  if (!session || !session.isUnattended) return null
+
+  const summary = _buildUnattendedSessionSummary(session)
+  const regs = GENERATED.registrations.filter(r => r.sessionId === sessionId && r.status !== 'cancelled')
+
+  const rows: UnattendedRegistrationRow[] = regs.map(r => {
+    const cust = GENERATED.customers.find(c => c.id === r.customerId)
+    const isPayable = r.type !== 'season_player'
+    const pays = isPayable
+      ? GENERATED.payments.filter(p => p.registrationId === r.id && p.status === 'paid')
+      : []
+    const hasActualPayment = pays.length > 0
+    const actualPaidAmount = pays.reduce((s, p) => s + p.amount, 0)
+    return {
+      registrationId: r.id,
+      customerId: r.customerId,
+      customerName: cust?.name ?? '?',
+      customerPhone: cust?.phone ?? null,
+      registrationType: r.type as 'season_player' | 'season_substitute' | 'walk_in',
+      isPayable,
+      expectedAmount: r.expectedAmount ?? 0,
+      selfReportedPaid: r.selfReportedPaid,
+      selfPaymentMethod: r.selfPaymentMethod,
+      selfPaymentEvidence: r.selfPaymentEvidence,
+      selfReportedAt: r.selfReportedAt,
+      hasActualPayment,
+      actualPaidAmount,
+      reportedNoPay: r.selfReportedPaid && !hasActualPayment && isPayable,
+      paidNotReported: !r.selfReportedPaid && hasActualPayment && isPayable,
+    }
+  })
+
+  // 把實付者排前面，未付者排後面便於老闆掃描
+  rows.sort((a, b) => {
+    if (a.hasActualPayment !== b.hasActualPayment) return a.hasActualPayment ? -1 : 1
+    if (a.selfReportedPaid !== b.selfReportedPaid) return a.selfReportedPaid ? -1 : 1
+    return a.customerName.localeCompare(b.customerName, 'zh-Hant')
+  })
+
+  return { summary, rows }
+}
+
+/** 列出可疑客戶（依 visible 過濾） */
+export function listSuspiciousCustomers(
+  visible: string[] | 'all' = 'all',
+): SuspiciousCustomer[] {
+  const ids = visible === 'all' ? null : new Set(visible)
+
+  // 找出 lookback 期間所有「應付且無人場次的報名」
+  const unattendedSessionIds = new Set(
+    GENERATED.sessions
+      .filter(s => s.isUnattended && _withinLookback(s.sessionDate))
+      .filter(s => !ids || ids.has(s.venueId))
+      .map(s => s.id),
+  )
+
+  // 按客戶 group
+  const byCustomer: Record<string, {
+    customerId: string
+    rows: { reg: Registration; session: Session }[]
+  }> = {}
+
+  for (const r of GENERATED.registrations) {
+    if (!unattendedSessionIds.has(r.sessionId)) continue
+    if (!_isUnattendedPayable(r)) continue
+    const session = GENERATED.sessions.find(s => s.id === r.sessionId)
+    if (!session) continue
+    if (!byCustomer[r.customerId]) {
+      byCustomer[r.customerId] = { customerId: r.customerId, rows: [] }
+    }
+    byCustomer[r.customerId].rows.push({ reg: r, session })
+  }
+
+  const result: SuspiciousCustomer[] = []
+
+  for (const { customerId, rows } of Object.values(byCustomer)) {
+    const unreported = rows.filter(x => !x.reg.selfReportedPaid)
+    if (unreported.length < _SUSPICIOUS_UNREPORTED_THRESHOLD) continue
+
+    const cust = GENERATED.customers.find(c => c.id === customerId)
+    if (!cust) continue
+
+    // 推主要去的館（出現最多次的 venue）
+    const venueCount: Record<string, number> = {}
+    for (const { session } of rows) {
+      venueCount[session.venueId] = (venueCount[session.venueId] ?? 0) + 1
+    }
+    const primaryVenueId = Object.entries(venueCount).sort((a, b) => b[1] - a[1])[0][0]
+    const primaryVenue = GENERATED.venues.find(v => v.id === primaryVenueId)
+
+    const totalOwed = unreported.reduce((s, x) => s + (x.reg.expectedAmount ?? 0), 0)
+    const recentDates = unreported
+      .map(x => x.session.sessionDate)
+      .sort()
+      .reverse()
+      .slice(0, 5)
+
+    result.push({
+      customerId,
+      customerName: cust.name,
+      customerPhone: cust.phone,
+      unattendedRegistrationsCount: rows.length,
+      selfReportedCount: rows.length - unreported.length,
+      unreportedCount: unreported.length,
+      totalOwedFromUnreported: totalOwed,
+      recentUnreportedDates: recentDates,
+      primaryVenueId,
+      primaryVenueName: primaryVenue?.name ?? '?',
+    })
+  }
+
+  return result.sort((a, b) =>
+    b.unreportedCount - a.unreportedCount
+    || b.totalOwedFromUnreported - a.totalOwedFromUnreported,
+  )
+}
+
+/** 取得整個 /reconciliation/unattended 頁所需的 overview */
+export function getUnattendedReportOverview(
+  visible: string[] | 'all' = 'all',
+): UnattendedReportOverview {
+  const sessions = listUnattendedSessionSummaries(visible)
+  const totalExpected = sessions.reduce((s, x) => s + x.expectedRevenue, 0)
+  const totalActual   = sessions.reduce((s, x) => s + x.actualRevenue,   0)
+  const totalPayable  = sessions.reduce((s, x) => s + x.payableCount, 0)
+  const totalReported = sessions.reduce((s, x) => s + x.selfReportedCount, 0)
+  const trustGapCount = sessions.reduce((s, x) => s + x.reportedButNoPayCount, 0)
+  const suspicious = listSuspiciousCustomers(visible)
+
+  return {
+    sessions,
+    totalExpected,
+    totalActual,
+    totalDiscrepancy: totalExpected - totalActual,
+    overallSelfReportRate: totalPayable > 0 ? totalReported / totalPayable : 0,
+    trustGapCount,
+    suspiciousCustomers: suspicious,
+    lookbackDays: _UNATTENDED_LOOKBACK_DAYS,
+    suspiciousThreshold: _SUSPICIOUS_UNREPORTED_THRESHOLD,
+    isFiltered: visible !== 'all',
+  }
+}
+
+// ── 10.5 Mutations ───────────────────────────────────────────
+
+/**
+ * 客戶在無人場次按「我已付款」。
+ *
+ * 入口設計：QR code → `/self-checkin/[sessionId]` 公開頁，
+ *   無需登入、無需 token（demo 階段；production 應加電話末 4 碼驗證）。
+ *
+ * 寫入：
+ *   - Registration.selfReportedPaid = true
+ *   - Registration.selfPaymentMethod = method
+ *   - Registration.selfPaymentEvidence = evidence ?? null
+ *   - Registration.selfReportedAt = now
+ *   - AuditLog: action='SELF_PAYMENT_REPORT', actorType='captain', actor.name=客戶姓名
+ *
+ * **不**自動產生 Payment — 「自助回報」≠「實收」，
+ * 老闆對照頁要看的就是兩者差距（信任落差）。
+ */
+export function customerReportSelfPayment(args: {
+  sessionId: string
+  registrationId: string
+  method: PaymentMethod
+  evidence?: string | null
+}): { ok: true } | { ok: false; reason: string } {
+  const reg = GENERATED.registrations.find(r => r.id === args.registrationId)
+  if (!reg) return { ok: false, reason: '找不到此報名' }
+  if (reg.sessionId !== args.sessionId) return { ok: false, reason: '報名與場次不符' }
+  if (reg.status === 'cancelled') return { ok: false, reason: '此報名已請假，無需付款' }
+  if (reg.type === 'season_player') return { ok: false, reason: '季打人員無需另外付款' }
+  if (reg.selfReportedPaid) return { ok: false, reason: '已回報過' }
+
+  const session = GENERATED.sessions.find(s => s.id === args.sessionId)
+  if (!session) return { ok: false, reason: '找不到場次' }
+  if (!session.isUnattended) return { ok: false, reason: '此場非無人場次' }
+
+  const customer = GENERATED.customers.find(c => c.id === reg.customerId)
+  const venueName = GENERATED.venues.find(v => v.id === session.venueId)?.name ?? null
+  const reportedAt = new Date().toISOString()
+
+  patchRegistrationSelfReport(args.registrationId, {
+    selfReportedPaid: true,
+    selfPaymentMethod: args.method,
+    selfPaymentEvidence: args.evidence ?? null,
+    selfReportedAt: reportedAt,
+  })
+
+  // actorType='captain' 是已存在的 AuditActorType union 之一，
+  // 涵蓋「對外端非登入身份」(主揪 + 客戶自助 + 自助訂場等)。
+  // entity id 用 registration id 保證可定位回該客戶該場次。
+  writeAudit({
+    actor: {
+      type: 'captain',
+      id: reg.id,
+      name: customer?.name ?? '客戶自助',
+    },
+    venue: venueName,
+    action: 'SELF_PAYMENT_REPORT',
+    entityType: 'Registration',
+    entityId: args.registrationId,
+    targetLabel: customer?.name ?? '?',
+    detail: `${session.sessionDate} ${session.startTime} 自助回報已付款（${args.method}）`,
+    newValues: {
+      selfReportedPaid: true,
+      selfPaymentMethod: args.method,
+      selfPaymentEvidence: args.evidence ?? null,
+    },
+  })
+
+  return { ok: true }
+}
+
+/**
+ * 取得 self-checkin 公開頁所需的資料。
+ *
+ * Public — 無需登入、無需 token。
+ * 回傳該無人場次的所有應付 Registration（不顯示季打人員）。
+ */
+export interface SelfCheckinSessionData {
+  sessionId: string
+  venueId: string
+  venueName: string
+  sessionDate: string
+  startTime: string
+  endTime: string
+  courtFee: number
+  acFee: number
+  acEnabled: boolean
+  totalAmount: number
+  status: SessionStatus
+  /** 一行 = 一個應付客戶；季打人員不出現在此 */
+  payableRegistrations: {
+    registrationId: string
+    customerId: string
+    customerName: string
+    customerPhoneMasked: string  // 0911-***-789 隱私
+    expectedAmount: number
+    selfReportedPaid: boolean
+    selfPaymentMethod: PaymentMethod | null
+    selfReportedAt: string | null
+  }[]
+}
+
+export function getSelfCheckinSessionData(sessionId: string): SelfCheckinSessionData | null {
+  const session = GENERATED.sessions.find(s => s.id === sessionId)
+  if (!session) return null
+  if (!session.isUnattended) return null
+
+  const venue = GENERATED.venues.find(v => v.id === session.venueId)
+  const regs = GENERATED.registrations.filter(
+    r => r.sessionId === sessionId && r.status !== 'cancelled' && r.type !== 'season_player',
+  )
+
+  return {
+    sessionId: session.id,
+    venueId: session.venueId,
+    venueName: venue?.name ?? '?',
+    sessionDate: session.sessionDate,
+    startTime: session.startTime,
+    endTime: session.endTime,
+    courtFee: session.courtFee,
+    acFee: session.acFee,
+    acEnabled: session.acEnabled,
+    totalAmount: session.courtFee + (session.acEnabled ? session.acFee : 0),
+    status: session.status,
+    payableRegistrations: regs.map(r => {
+      const cust = GENERATED.customers.find(c => c.id === r.customerId)
+      const phone = cust?.phone ?? ''
+      const masked = phone
+        ? phone.slice(0, 4) + '-***-' + phone.slice(-3)
+        : '（未提供）'
+      return {
+        registrationId: r.id,
+        customerId: r.customerId,
+        customerName: cust?.name ?? '?',
+        customerPhoneMasked: masked,
+        expectedAmount: r.expectedAmount ?? 0,
+        selfReportedPaid: r.selfReportedPaid,
+        selfPaymentMethod: r.selfPaymentMethod,
+        selfReportedAt: r.selfReportedAt,
+      }
+    }),
+  }
+}
+
+/**
+ * 找到最近一場日日 v4 的無人場次 — 給老闆 demo 跳轉用。
+ *
+ * 老闆切到 /reconciliation/unattended 看到「日日 5/11 14:00」缺口 → 
+ *   點該場 → 取得該 sessionId → 在新分頁開 /self-checkin/<sessionId> 模擬客戶
+ *   → 按下「我已付款」 → 回管理頁看信任落差 +1
+ *
+ * 偏好「最近過去」場次（在 lookback 內），這樣自助回報會立即出現在統計裡。
+ * 沒過去場次時退到最近未來場次。
+ */
+export function getLatestUnattendedSessionForDemo(venueId?: string): string | null {
+  const all = GENERATED.sessions
+    .filter(s => s.isUnattended)
+    .filter(s => !venueId || s.venueId === venueId)
+
+  // 優先：在 lookback 內、未來找最近的「過去場次」
+  const inLookback = all
+    .filter(s => _withinLookback(s.sessionDate))
+    .sort((a, b) => (a.sessionDate < b.sessionDate ? 1 : a.sessionDate > b.sessionDate ? -1 : 0))
+  if (inLookback.length > 0) return inLookback[0].id
+
+  // 沒過去場次：退回找最近未來場次
+  const future = all
+    .filter(s => s.sessionDate > TODAY_STR)
+    .sort((a, b) => (a.sessionDate < b.sessionDate ? -1 : 1))
+  return future[0]?.id ?? all[0]?.id ?? null
+}
+
+/**
+ * 老闆 / 館長：對某可疑客戶「一鍵發備註提醒」。
+ *
+ * Demo 用：不真的發簡訊，只寫一筆 AuditLog 紀錄「曾提醒過」。
+ * 同一客戶反覆呼叫會疊多筆 — 老闆要自己控管。
+ *
+ * Audit action 用字串 'SEND_SELF_REPORT_REMINDER' cast 進 AuditAction
+ *   （types/index.ts 凍結，無法在 union 加新 literal）。
+ *   未來解凍 types 時應補進 AuditAction union。
+ */
+export function sendSelfReportReminder(args: {
+  customerId: string
+  /** 場次 id（可選）— 提醒涉及哪一場 */
+  sessionId?: string
+  /** 提醒文字（demo 顯示用） */
+  message?: string
+}): { ok: true; logId: string } | { ok: false; reason: string } {
+  const customer = GENERATED.customers.find(c => c.id === args.customerId)
+  if (!customer) return { ok: false, reason: '找不到客戶' }
+
+  const session = args.sessionId
+    ? GENERATED.sessions.find(s => s.id === args.sessionId)
+    : null
+  const venueName = session
+    ? GENERATED.venues.find(v => v.id === session.venueId)?.name ?? null
+    : null
+
+  const detail = args.message
+    ?? (session
+      ? `傳送自助回報提醒給 ${customer.name}（${session.sessionDate}）`
+      : `傳送自助回報提醒給 ${customer.name}`)
+
+  // 取出最近一筆 audit id 之前先記憶當前 length（簡化：自己 gen）
+  const logId = genId('audit')
+  appendAuditLog({
+    id: logId,
+    userId: getCurrentUserId(),
+    action: 'SEND_SELF_REPORT_REMINDER',
+    entityType: 'Customer',
+    entityId: args.customerId,
+    oldValues: null,
+    newValues: { sessionId: args.sessionId ?? null, customerPhone: customer.phone },
+    ipAddress: null,
+    createdAt: new Date().toISOString(),
+    userName: getAdminActor().name,
+    actorType: 'user' as AuditActorType,
+    actorName: getAdminActor().name,
+    venue: venueName,
+    targetLabel: customer.name,
+    detail,
+  })
+
+  return { ok: true, logId }
+}
+
+// ── 10.6 Re-export for Block B/C ─────────────────────────────
+// 讓 page 只 import @/data/api 即可拿到 transfer 相關工具
+// （C 區會用到 ProductTransfer 型別）
+
+export type ProductTransferStage5     = _ProductTransfer_s5
+export type ProductTransferStatus     = _ProductTransferStatus_s5
+export const PRODUCT_TRANSFER_STATUS_LABEL = _PRODUCT_TRANSFER_STATUS_LABEL_s5
+
+// 避免 lint warning：未來 Block B/C 會用到這些 — 先做 alias，
+// 否則 TS strict 會抱怨 imported but unused。
+export const _stage5InternalRefs = {
+  addProductTransaction: _addProductTransaction_s5,
+  addProductTransfer: _addProductTransfer_s5,
+  patchProductTransfer: _patchProductTransfer_s5,
+  getAllTransfers: _getAllTransfers_s5,
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// 十一、誠實商店投錢箱對帳（階段 5 Block B）
+// ════════════════════════════════════════════════════════════
+// 故事點 5 延伸：誠實商店 = 客戶自助拿商品、自助投錢。
+// 偵測：（1）盤點缺口（manual 觸發）（2）匿名銷售比例（自動）
+//      （3）庫存 vs 銷售一致性（自動）
+//
+// 識別誠實商店商品：透過 Product.isHonestShop 欄位（階段 6 解凍 types 後新增），
+// 全館適用。目前包含：p1 運動飲料 ($35) — 各館入口投錢箱皆有。
+// ────────────────────────────────────────────────────────────
+
+import {
+  addBoxAudit as _addBoxAudit_s5,
+  getAllBoxAudits as _getAllBoxAudits_s5,
+  type BoxAuditRecord as _BoxAuditRecord_s5,
+} from './store'
+
+// ── 11.1 常數 / Helpers ──────────────────────────────────────
+
+/**
+ * 取得「誠實商店」商品 id 集合 — 從 GENERATED.products 動態篩 isHonestShop=true。
+ *
+ * 階段 6 之前：寫死 `new Set(['p1'])`（types 凍結，Product 沒 isHonestShop 欄位）。
+ * 階段 6 解凍 types 後：直接由欄位決定，未來 generator 加新 honest-shop 商品自動納入。
+ *
+ * 注意：每次呼叫都會重新走一遍 products 陣列。如有性能疑慮，
+ *      caller 端可快取結果（products 陣列在 demo 期間不會新增 / 刪除）。
+ */
+export function getHonestShopProductIds(): Set<string> {
+  return new Set(
+    GENERATED.products
+      .filter(p => p.isHonestShop === true)
+      .map(p => p.id),
+  )
+}
+
+/** 單一商品是否為誠實商店商品 */
+export function isHonestShopProduct(productId: string): boolean {
+  const p = GENERATED.products.find(p => p.id === productId)
+  return p?.isHonestShop === true
+}
+
+/** 最近多少天的銷售納入帳面計算 */
+const _HONEST_SHOP_LOOKBACK_DAYS = 30
+
+/** 匿名銷售比例多少以上視為可疑（缺乏問責追蹤） */
+const _HIGH_ANONYMOUS_RATIO_THRESHOLD = 0.6
+
+/** 盤點缺口超過多少元視為顯著差異（顯示紅標） */
+const _SIGNIFICANT_DISCREPANCY_AMOUNT = 100
+
+// ── 11.2 Interfaces ──────────────────────────────────────────
+
+/** 某 venue × honest product 的對帳概況 */
+export interface HonestShopVenueProductSummary {
+  venueId: string
+  venueName: string
+  productId: string
+  productName: string
+  unitPrice: number
+  /** 當前庫存 */
+  currentStock: number
+  /** 低庫存門檻 */
+  lowStockThreshold: number
+  /** 期間內 sale 筆數 */
+  saleCount: number
+  /** 期間內銷售總量（罐數） */
+  totalSoldQty: number
+  /** 期間內帳面銷售總額 */
+  totalRevenue: number
+  /** 期間內贈送量 */
+  giftedQty: number
+  /** 期間內匿名銷售筆數（customerId = null） */
+  anonymousSaleCount: number
+  /** 匿名比例 */
+  anonymousRatio: number
+  /** 最近一次盤點記錄（無則 null） */
+  lastAudit: BoxAuditRecord | null
+  /** 此 venue × product 累積發現缺口（歷次 audit 加總） */
+  cumulativeDiscrepancy: number
+  /** 是否異常（匿名過高 或 累積缺口顯著） */
+  isFlagged: boolean
+}
+
+/** 投錢箱盤點記錄（re-export 型別） */
+export type BoxAuditRecord = _BoxAuditRecord_s5
+
+/** /reconciliation/honest-shop 主頁 overview */
+export interface HonestShopOverview {
+  /** 各 venue × honest product 概況 */
+  rows: HonestShopVenueProductSummary[]
+  /** 期間帳面銷售總額 */
+  totalRevenue: number
+  /** 累積發現缺口（歷次盤點加總） */
+  totalDiscrepancy: number
+  /** 已盤點次數 */
+  auditCount: number
+  /** 平均誠實率（sum counted / sum expected, 僅算有盤點記錄者） */
+  averageHonestyRate: number
+  /** 異常旗標數 */
+  flaggedCount: number
+  /** lookback 天數 */
+  lookbackDays: number
+  /** 匿名比例門檻 */
+  anonymousRatioThreshold: number
+  /** 是否被 visible 過濾 */
+  isFiltered: boolean
+}
+
+// ── 11.3 內部 helper ─────────────────────────────────────────
+
+function _honestShopLookbackStart(): string {
+  return dateAddDays(TODAY_STR, -_HONEST_SHOP_LOOKBACK_DAYS)
+}
+
+function _buildVenueProductSummary(
+  venueId: string,
+  productId: string,
+): HonestShopVenueProductSummary {
+  const venue   = GENERATED.venues.find(v => v.id === venueId)
+  const product = GENERATED.products.find(p => p.id === productId)
+  const vpEntry = GENERATED.venueProducts.find(vp => vp.venueId === venueId)
+  const vp      = vpEntry?.products.find(p => p.name === product?.name)
+
+  const lookbackStartIso = _honestShopLookbackStart() + 'T00:00:00Z'
+  const txs = GENERATED.productTransactions.filter(t =>
+    t.venueId === venueId
+    && t.productId === productId
+    && t.operatedAt >= lookbackStartIso,
+  )
+  const sales = txs.filter(t => t.type === 'sale')
+  const gifts = txs.filter(t => t.type === 'gift')
+
+  const totalSoldQty   = sales.reduce((s, t) => s + Math.abs(t.quantity), 0)
+  const totalRevenue   = sales.reduce((s, t) => s + (t.totalAmount ?? 0), 0)
+  const giftedQty      = gifts.reduce((s, t) => s + Math.abs(t.quantity), 0)
+  const anonymousSaleCount = sales.filter(t => !t.customerId).length
+  const anonymousRatio = sales.length > 0 ? anonymousSaleCount / sales.length : 0
+
+  const audits = _getAllBoxAudits_s5().filter(a =>
+    a.venueId === venueId && a.productId === productId,
+  )
+  const lastAudit = audits.length > 0
+    ? audits.slice().sort((a, b) => a.auditedAt < b.auditedAt ? 1 : -1)[0]
+    : null
+  const cumulativeDiscrepancy = audits.reduce((s, a) => s + a.cashDiscrepancy, 0)
+
+  const isFlagged =
+    anonymousRatio >= _HIGH_ANONYMOUS_RATIO_THRESHOLD
+    || cumulativeDiscrepancy >= _SIGNIFICANT_DISCREPANCY_AMOUNT
+
+  return {
+    venueId,
+    venueName: venue?.name ?? '?',
+    productId,
+    productName: product?.name ?? '?',
+    unitPrice: vp?.unitPrice ?? product?.unitPrice ?? 0,
+    currentStock: vp?.currentStock ?? 0,
+    lowStockThreshold: vp?.lowStockThreshold ?? 5,
+    saleCount: sales.length,
+    totalSoldQty,
+    totalRevenue,
+    giftedQty,
+    anonymousSaleCount,
+    anonymousRatio,
+    lastAudit,
+    cumulativeDiscrepancy,
+    isFlagged,
+  }
+}
+
+// ── 11.4 公開查詢 ────────────────────────────────────────────
+
+/** 取得 /reconciliation/honest-shop 頁所需的 overview */
+export function getHonestShopOverview(
+  visible: string[] | 'all' = 'all',
+): HonestShopOverview {
+  const ids = visible === 'all' ? null : new Set(visible)
+  const activeVenues = GENERATED.venues.filter(v =>
+    v.isActive && (!ids || ids.has(v.id)),
+  )
+
+  const rows: HonestShopVenueProductSummary[] = []
+  const honestShopProductIds = getHonestShopProductIds()
+  for (const v of activeVenues) {
+    for (const pid of honestShopProductIds) {
+      // 確認該館有上架此商品
+      const vpEntry = GENERATED.venueProducts.find(vp => vp.venueId === v.id)
+      const productName = GENERATED.products.find(p => p.id === pid)?.name
+      const hasProduct = vpEntry?.products.some(p => p.name === productName)
+      if (!hasProduct) continue
+      rows.push(_buildVenueProductSummary(v.id, pid))
+    }
+  }
+
+  rows.sort((a, b) =>
+    Number(b.isFlagged) - Number(a.isFlagged)
+    || b.anonymousRatio - a.anonymousRatio,
+  )
+
+  const totalRevenue = rows.reduce((s, r) => s + r.totalRevenue, 0)
+  const totalDiscrepancy = rows.reduce((s, r) => s + r.cumulativeDiscrepancy, 0)
+  const allAudits = _getAllBoxAudits_s5().filter(a => !ids || ids.has(a.venueId))
+  const auditCount = allAudits.length
+  const sumExpected = allAudits.reduce((s, a) => s + a.expectedRevenue, 0)
+  const sumCounted  = allAudits.reduce((s, a) => s + a.countedCash, 0)
+  const averageHonestyRate = sumExpected > 0 ? sumCounted / sumExpected : 1
+
+  return {
+    rows,
+    totalRevenue,
+    totalDiscrepancy,
+    auditCount,
+    averageHonestyRate,
+    flaggedCount: rows.filter(r => r.isFlagged).length,
+    lookbackDays: _HONEST_SHOP_LOOKBACK_DAYS,
+    anonymousRatioThreshold: _HIGH_ANONYMOUS_RATIO_THRESHOLD,
+    isFiltered: visible !== 'all',
+  }
+}
+
+/** 列出某 venue × product 的盤點歷史（時間新→舊） */
+export function listBoxAudits(
+  venueId?: string,
+  productId?: string,
+  visible: string[] | 'all' = 'all',
+): BoxAuditRecord[] {
+  const ids = visible === 'all' ? null : new Set(visible)
+  return _getAllBoxAudits_s5()
+    .filter(a => !venueId || a.venueId === venueId)
+    .filter(a => !productId || a.productId === productId)
+    .filter(a => !ids || ids.has(a.venueId))
+    .sort((a, b) => a.auditedAt < b.auditedAt ? 1 : -1)
+}
+
+/** 預覽盤點：計算「假如老闆現在輸入 $X」會看到的對帳結果（不寫入） */
+export function previewBoxAudit(args: {
+  venueId: string
+  productId: string
+  /** 盤點期間（不含當天）— 預設 = 上次盤點之後 / 沒上次則 lookback 起點 */
+  periodStart?: string
+  periodEnd?: string
+}): {
+  periodStart: string
+  periodEnd: string
+  expectedRevenue: number
+  expectedQuantitySold: number
+  currentStock: number
+  anonymousCount: number
+  saleCount: number
+} {
+  const lastAudit = _getAllBoxAudits_s5()
+    .filter(a => a.venueId === args.venueId && a.productId === args.productId)
+    .sort((a, b) => a.auditedAt < b.auditedAt ? 1 : -1)[0]
+
+  const periodStart = args.periodStart
+    ?? (lastAudit?.periodEnd ?? _honestShopLookbackStart())
+  const periodEnd = args.periodEnd ?? TODAY_STR
+
+  const startIso = periodStart + 'T00:00:00Z'
+  const endIso   = periodEnd + 'T23:59:59Z'
+
+  const sales = GENERATED.productTransactions.filter(t =>
+    t.venueId === args.venueId
+    && t.productId === args.productId
+    && t.type === 'sale'
+    && t.operatedAt >= startIso
+    && t.operatedAt <= endIso,
+  )
+
+  const vpEntry = GENERATED.venueProducts.find(vp => vp.venueId === args.venueId)
+  const productName = GENERATED.products.find(p => p.id === args.productId)?.name
+  const vp = vpEntry?.products.find(p => p.name === productName)
+
+  return {
+    periodStart,
+    periodEnd,
+    expectedRevenue: sales.reduce((s, t) => s + (t.totalAmount ?? 0), 0),
+    expectedQuantitySold: sales.reduce((s, t) => s + Math.abs(t.quantity), 0),
+    currentStock: vp?.currentStock ?? 0,
+    anonymousCount: sales.filter(t => !t.customerId).length,
+    saleCount: sales.length,
+  }
+}
+
+// ── 11.5 Mutations ───────────────────────────────────────────
+
+/**
+ * 老闆 / 館長執行「投錢箱盤點」。
+ *
+ * 流程：
+ *   1. 系統算「帳面銷售」expectedRevenue（從上次盤點 / lookback 起點到今天）
+ *   2. 老闆輸入：投錢箱實收 countedCash + 庫存實際剩 countedStock
+ *   3. 系統算缺口 = expectedRevenue − countedCash
+ *   4. 寫入：
+ *      - BoxAuditRecord（盤點歷史）
+ *      - ProductTransaction(type='adjustment')（庫存校正，若 countedStock ≠ expectedStock）
+ *      - AuditLog（行為紀錄）
+ */
+export function recordBoxAudit(args: {
+  venueId: string
+  productId: string
+  countedCash: number
+  countedStock: number
+  notes?: string | null
+  /** 自訂期間，預設為「上次盤點後到今天」 */
+  periodStart?: string
+  periodEnd?: string
+}): { ok: true; auditId: string; cashDiscrepancy: number; stockDiscrepancy: number } | { ok: false; reason: string } {
+  if (args.countedCash < 0) return { ok: false, reason: '實收金額不可為負' }
+  if (args.countedStock < 0) return { ok: false, reason: '庫存不可為負' }
+  if (!isHonestShopProduct(args.productId)) {
+    return { ok: false, reason: '此商品非誠實商店商品' }
+  }
+
+  const venue = GENERATED.venues.find(v => v.id === args.venueId)
+  if (!venue) return { ok: false, reason: '找不到球館' }
+
+  const product = GENERATED.products.find(p => p.id === args.productId)
+  if (!product) return { ok: false, reason: '找不到商品' }
+
+  // 1. 算帳面
+  const preview = previewBoxAudit({
+    venueId: args.venueId,
+    productId: args.productId,
+    periodStart: args.periodStart,
+    periodEnd: args.periodEnd,
+  })
+
+  const cashDiscrepancy  = preview.expectedRevenue - args.countedCash
+  const stockDiscrepancy = preview.currentStock - args.countedStock // 正數 = 帳面比實際多（損耗）
+  const auditedAt = new Date().toISOString()
+  const auditId = genId('boxaudit')
+
+  // 2. 寫盤點記錄
+  _addBoxAudit_s5({
+    id: auditId,
+    venueId: args.venueId,
+    productId: args.productId,
+    auditedAt,
+    periodStart: preview.periodStart,
+    periodEnd: preview.periodEnd,
+    expectedRevenue: preview.expectedRevenue,
+    expectedQuantitySold: preview.expectedQuantitySold,
+    countedCash: args.countedCash,
+    countedStock: args.countedStock,
+    cashDiscrepancy,
+    auditedBy: getCurrentUserId(),
+    notes: args.notes ?? null,
+  })
+
+  // 3. 若庫存有差異，寫一筆 adjustment ProductTransaction 校正
+  if (stockDiscrepancy !== 0) {
+    // 直接 mutate VenueProduct.currentStock 把帳面庫存對齊實際盤點數
+    // 同時記錄 type='adjustment' Tx（負數 = 損耗）
+    const vpEntry = GENERATED.venueProducts.find(vp => vp.venueId === args.venueId)
+    const vp = vpEntry?.products.find(p => p.name === product.name)
+    if (vp) {
+      // mutate currentStock
+      ;(vp as unknown as { currentStock: number }).currentStock = args.countedStock
+    }
+    _addProductTransaction_s5({
+      id: genId('pt'),
+      productId: args.productId,
+      venueId: args.venueId,
+      operatedBy: getCurrentUserId(),
+      type: 'adjustment',
+      quantity: -stockDiscrepancy, // stockDiscrepancy 正 = 損耗 → 庫存再扣（負數 qty 表示減少）
+      unitPrice: null,
+      totalAmount: null,
+      customerId: null,
+      sessionId: null,
+      notes: stockDiscrepancy > 0
+        ? `盤點發現損耗 ${stockDiscrepancy} 件`
+        : `盤點發現多 ${-stockDiscrepancy} 件（補貨未登？）`,
+      operatedAt: auditedAt,
+      productName: product.name,
+      operatorName: getAdminActor().name,
+      customerName: undefined,
+    })
+  }
+
+  // 4. audit log（用既有 ADJUST_STOCK action — 已存在 union 中）
+  writeAudit({
+    actor: getAdminActor(),
+    venue: venue.name,
+    action: 'ADJUST_STOCK',
+    entityType: 'BoxAudit',
+    entityId: auditId,
+    targetLabel: `${venue.name} · ${product.name}`,
+    detail: cashDiscrepancy > 0
+      ? `投錢箱盤點：帳面 $${preview.expectedRevenue}、實收 $${args.countedCash}、缺口 $${cashDiscrepancy}`
+      : cashDiscrepancy < 0
+      ? `投錢箱盤點：帳面 $${preview.expectedRevenue}、實收 $${args.countedCash}、多收 $${-cashDiscrepancy}`
+      : `投錢箱盤點：帳面 $${preview.expectedRevenue} 與實收一致`,
+    newValues: {
+      expectedRevenue: preview.expectedRevenue,
+      countedCash: args.countedCash,
+      cashDiscrepancy,
+      stockDiscrepancy,
+    },
+  })
+
+  return { ok: true, auditId, cashDiscrepancy, stockDiscrepancy }
+}
+
+
+
+// ════════════════════════════════════════════════════════════
+// 十二、跨館商品調貨（階段 5 Block C）
+// ════════════════════════════════════════════════════════════
+// 場景：飛翼 v3 運動飲料剩 3 罐，球魔方 v1 有 18 罐 → 飛翼館長申請調貨。
+//
+// 三階段流程：
+//   1. pending  — 入貨館申請，等出貨館同意
+//   2. in_transit — 出貨館確認出貨（扣其庫存 + adjustment Tx）
+//   3. completed — 入貨館收到（加其庫存 + adjustment Tx）
+// 任何階段可 cancelled（不退已扣的庫存 — 出貨館要自己再開逆向調貨補回）
+//
+// 階段 6 更新（types 已解凍）：
+//   - ProductTransfer 型別已搬入 types/index.ts；store.ts 只留 in-memory 陣列。
+//   - audit action 'PRODUCT_TRANSFER' 已正式加入 AuditAction union（不再 cast）。
+//     created / shipped / received / cancelled 4 個 phase 都用同一個 action，
+//     具體 phase 從 audit.newValues.phase 判斷。
+//
+// 階段 7 更新：
+//   - 'PRODUCT_TRANSFER' 已拆為 4 個 union member：
+//     PRODUCT_TRANSFER_CREATED / _SHIPPED / _RECEIVED / _CANCELLED
+//     audit filter 可單獨篩選每個 phase（例如「只看取消」）。
+//     newValues.step 仍保留（向後相容 + 額外資訊），但已不再是區分依據。
+//   - 4 個新 action 已加入 ADMIN_ACTIONS Set（修階段 6 漏的 bug）。
+//   - hydrate 時會 migrate 舊 'PRODUCT_TRANSFER' audit log 到對應新 action
+//     （見 store.ts hydrate）。
+// ────────────────────────────────────────────────────────────
+
+// ── 12.1 Interfaces ──────────────────────────────────────────
+
+/** 調貨單摘要（含 join 出來的顯示欄位） */
+export interface ProductTransferRow {
+  id: string
+  productId: string
+  productName: string
+  unitPrice: number
+  fromVenueId: string
+  fromVenueName: string
+  toVenueId: string
+  toVenueName: string
+  quantity: number
+  status: ProductTransferStatus
+  statusLabel: string
+  requestedBy: string
+  requestedByName: string
+  requestedAt: string
+  completedAt: string | null
+  notes: string | null
+  /** 目前各館庫存（顯示用） */
+  fromVenueCurrentStock: number
+  toVenueCurrentStock: number
+}
+
+/** 智能建議：低庫存館應該從高庫存館調貨 */
+export interface TransferSuggestion {
+  productId: string
+  productName: string
+  unitPrice: number
+  fromVenueId: string
+  fromVenueName: string
+  fromStock: number
+  toVenueId: string
+  toVenueName: string
+  toStock: number
+  toLowStockThreshold: number
+  /** 建議調撥量 = 補到 toLowStockThreshold × 2，但不超過 from 的 50% */
+  suggestedQty: number
+  /** 缺貨嚴重程度 */
+  severity: 'high' | 'medium' | 'low'
+}
+
+/** /products/transfers 頁所需 overview */
+export interface ProductTransferOverview {
+  transfers: ProductTransferRow[]
+  pendingCount: number
+  inTransitCount: number
+  completedThisMonthCount: number
+  cancelledCount: number
+  totalQuantityCompleted: number
+  suggestions: TransferSuggestion[]
+  isFiltered: boolean
+}
+
+// ── 12.2 內部 helper ─────────────────────────────────────────
+
+function _buildTransferRow(t: ProductTransferStage5): ProductTransferRow {
+  const product = GENERATED.products.find(p => p.id === t.productId)
+  const fromVenue = GENERATED.venues.find(v => v.id === t.fromVenueId)
+  const toVenue = GENERATED.venues.find(v => v.id === t.toVenueId)
+  const requester = GENERATED.users.find(u => u.id === t.requestedBy)
+
+  const fromVp = GENERATED.venueProducts.find(vp => vp.venueId === t.fromVenueId)
+  const toVp = GENERATED.venueProducts.find(vp => vp.venueId === t.toVenueId)
+  const fromProduct = fromVp?.products.find(p => p.name === product?.name)
+  const toProduct = toVp?.products.find(p => p.name === product?.name)
+
+  return {
+    id: t.id,
+    productId: t.productId,
+    productName: product?.name ?? '?',
+    unitPrice: fromProduct?.unitPrice ?? product?.unitPrice ?? 0,
+    fromVenueId: t.fromVenueId,
+    fromVenueName: fromVenue?.name ?? '?',
+    toVenueId: t.toVenueId,
+    toVenueName: toVenue?.name ?? '?',
+    quantity: t.quantity,
+    status: t.status,
+    statusLabel: PRODUCT_TRANSFER_STATUS_LABEL[t.status],
+    requestedBy: t.requestedBy,
+    requestedByName: requester?.name ?? '系統',
+    requestedAt: t.requestedAt,
+    completedAt: t.completedAt,
+    notes: t.notes,
+    fromVenueCurrentStock: fromProduct?.currentStock ?? 0,
+    toVenueCurrentStock: toProduct?.currentStock ?? 0,
+  }
+}
+
+// ── 12.3 公開查詢 ────────────────────────────────────────────
+
+/** 列出所有調貨單（按狀態 + 申請時間排序，pending/in_transit 在前） */
+export function listProductTransfers(
+  visible: string[] | 'all' = 'all',
+): ProductTransferRow[] {
+  const ids = visible === 'all' ? null : new Set(visible)
+  const STATUS_ORDER: Record<ProductTransferStatus, number> = {
+    pending: 0, in_transit: 1, completed: 2, cancelled: 3,
+  }
+  return _getAllTransfers_s5()
+    .filter(t => !ids || ids.has(t.fromVenueId) || ids.has(t.toVenueId))
+    .map(_buildTransferRow)
+    .sort((a, b) => {
+      const so = STATUS_ORDER[a.status] - STATUS_ORDER[b.status]
+      if (so !== 0) return so
+      return a.requestedAt < b.requestedAt ? 1 : -1
+    })
+}
+
+/** 計算「智能建議：低庫存館從高庫存館調貨」 */
+export function suggestProductTransfers(
+  visible: string[] | 'all' = 'all',
+): TransferSuggestion[] {
+  const ids = visible === 'all' ? null : new Set(visible)
+  const venues = GENERATED.venues.filter(v => v.isActive && (!ids || ids.has(v.id)))
+  const suggestions: TransferSuggestion[] = []
+
+  // 拿目前所有 pending/in_transit 的「即將補貨」，避免重複建議
+  const pendingTransfers = _getAllTransfers_s5().filter(
+    t => t.status === 'pending' || t.status === 'in_transit',
+  )
+
+  for (const product of GENERATED.products) {
+    // 找該產品在每個館的庫存
+    const inventory: { venueId: string; venueName: string; stock: number; threshold: number }[] = []
+    for (const v of venues) {
+      const vpEntry = GENERATED.venueProducts.find(vp => vp.venueId === v.id)
+      const vp = vpEntry?.products.find(p => p.name === product.name)
+      if (!vp) continue
+      inventory.push({
+        venueId: v.id,
+        venueName: v.name,
+        stock: vp.currentStock,
+        threshold: vp.lowStockThreshold,
+      })
+    }
+
+    // 排序：低庫存館優先當「收貨方」、高庫存館當「出貨方」
+    const lowStockVenues = inventory
+      .filter(i => i.stock <= i.threshold)
+      .sort((a, b) => a.stock - b.stock)
+    const highStockVenues = inventory
+      .filter(i => i.stock > i.threshold * 3)
+      .sort((a, b) => b.stock - a.stock)
+
+    for (const low of lowStockVenues) {
+      // 已有 pending/in_transit 補貨給這個館 = skip
+      const alreadyPending = pendingTransfers.some(
+        t => t.toVenueId === low.venueId && t.productId === product.id,
+      )
+      if (alreadyPending) continue
+
+      const source = highStockVenues.find(h => h.venueId !== low.venueId)
+      if (!source) continue
+
+      const targetReplenish = Math.max(low.threshold * 2 - low.stock, 1)
+      const sourceLimit = Math.floor(source.stock * 0.5)
+      const suggestedQty = Math.max(1, Math.min(targetReplenish, sourceLimit))
+
+      const severity: TransferSuggestion['severity'] =
+        low.stock === 0 ? 'high' :
+        low.stock <= low.threshold * 0.5 ? 'medium' : 'low'
+
+      suggestions.push({
+        productId: product.id,
+        productName: product.name,
+        unitPrice: product.unitPrice ?? 0,
+        fromVenueId: source.venueId,
+        fromVenueName: source.venueName,
+        fromStock: source.stock,
+        toVenueId: low.venueId,
+        toVenueName: low.venueName,
+        toStock: low.stock,
+        toLowStockThreshold: low.threshold,
+        suggestedQty,
+        severity,
+      })
+    }
+  }
+
+  const SEVERITY_ORDER: Record<TransferSuggestion['severity'], number> = {
+    high: 0, medium: 1, low: 2,
+  }
+  return suggestions.sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
+}
+
+export function getProductTransferOverview(
+  visible: string[] | 'all' = 'all',
+): ProductTransferOverview {
+  const transfers = listProductTransfers(visible)
+  const thisMonth = TODAY_STR.slice(0, 7) // YYYY-MM
+  return {
+    transfers,
+    pendingCount:            transfers.filter(t => t.status === 'pending').length,
+    inTransitCount:          transfers.filter(t => t.status === 'in_transit').length,
+    completedThisMonthCount: transfers.filter(t =>
+      t.status === 'completed' && t.completedAt?.slice(0, 7) === thisMonth,
+    ).length,
+    cancelledCount:          transfers.filter(t => t.status === 'cancelled').length,
+    totalQuantityCompleted:  transfers
+      .filter(t => t.status === 'completed')
+      .reduce((s, t) => s + t.quantity, 0),
+    suggestions: suggestProductTransfers(visible),
+    isFiltered: visible !== 'all',
+  }
+}
+
+// ── 12.4 Mutations ───────────────────────────────────────────
+
+/**
+ * 建立調貨單（pending 狀態）。
+ * 由入貨館（toVenueId）或老闆發起。
+ */
+export function createProductTransfer(args: {
+  productId: string
+  fromVenueId: string
+  toVenueId: string
+  quantity: number
+  notes?: string | null
+}): { ok: true; transferId: string } | { ok: false; reason: string } {
+  if (args.fromVenueId === args.toVenueId) return { ok: false, reason: '出貨/入貨館不可相同' }
+  if (args.quantity <= 0) return { ok: false, reason: '調貨數量必須大於 0' }
+
+  const product = GENERATED.products.find(p => p.id === args.productId)
+  if (!product) return { ok: false, reason: '找不到商品' }
+
+  const fromVenue = GENERATED.venues.find(v => v.id === args.fromVenueId)
+  const toVenue   = GENERATED.venues.find(v => v.id === args.toVenueId)
+  if (!fromVenue || !toVenue) return { ok: false, reason: '球館不存在' }
+
+  // 檢查出貨館確實有此商品庫存
+  const fromVp = GENERATED.venueProducts.find(vp => vp.venueId === args.fromVenueId)
+  const fromProduct = fromVp?.products.find(p => p.name === product.name)
+  if (!fromProduct) return { ok: false, reason: `${fromVenue.name} 未上架此商品` }
+  if (fromProduct.currentStock < args.quantity) {
+    return { ok: false, reason: `${fromVenue.name} 庫存不足（剩 ${fromProduct.currentStock}）` }
+  }
+
+  const transferId = genId('xfer')
+  _addProductTransfer_s5({
+    id: transferId,
+    productId: args.productId,
+    fromVenueId: args.fromVenueId,
+    toVenueId: args.toVenueId,
+    quantity: args.quantity,
+    requestedBy: getCurrentUserId(),
+    status: 'pending',
+    requestedAt: new Date().toISOString(),
+    completedAt: null,
+    notes: args.notes ?? null,
+  })
+
+  writeAudit({
+    actor: getAdminActor(),
+    venue: `${fromVenue.name} → ${toVenue.name}`,
+    action: 'PRODUCT_TRANSFER_CREATED',
+    entityType: 'ProductTransfer',
+    entityId: transferId,
+    targetLabel: product.name,
+    detail: `申請：${fromVenue.name} → ${toVenue.name}，${product.name} × ${args.quantity}${args.notes ? ` (${args.notes})` : ''}`,
+    newValues: {
+      step: 'created',
+      productId: args.productId,
+      fromVenueId: args.fromVenueId,
+      toVenueId: args.toVenueId,
+      quantity: args.quantity,
+    },
+  })
+
+  return { ok: true, transferId }
+}
+
+/** 出貨確認：pending → in_transit。扣 from 館庫存 + 寫 adjustment Tx。 */
+export function shipProductTransfer(transferId: string): { ok: true } | { ok: false; reason: string } {
+  const t = _getAllTransfers_s5().find(x => x.id === transferId)
+  if (!t) return { ok: false, reason: '找不到調貨單' }
+  if (t.status !== 'pending') return { ok: false, reason: `當前狀態為 ${PRODUCT_TRANSFER_STATUS_LABEL[t.status]}` }
+
+  const product = GENERATED.products.find(p => p.id === t.productId)
+  const fromVenue = GENERATED.venues.find(v => v.id === t.fromVenueId)
+  const toVenue = GENERATED.venues.find(v => v.id === t.toVenueId)
+  if (!product || !fromVenue || !toVenue) return { ok: false, reason: '資料不完整' }
+
+  // 出貨：扣 from 庫存
+  const fromVp = GENERATED.venueProducts.find(vp => vp.venueId === t.fromVenueId)
+  const fromProduct = fromVp?.products.find(p => p.name === product.name)
+  if (!fromProduct) return { ok: false, reason: `${fromVenue.name} 未上架此商品` }
+  if (fromProduct.currentStock < t.quantity) {
+    return { ok: false, reason: `${fromVenue.name} 庫存不足（剩 ${fromProduct.currentStock}）` }
+  }
+  ;(fromProduct as unknown as { currentStock: number }).currentStock = fromProduct.currentStock - t.quantity
+
+  // 寫 adjustment Tx
+  _addProductTransaction_s5({
+    id: genId('pt'),
+    productId: t.productId,
+    venueId: t.fromVenueId,
+    operatedBy: getCurrentUserId(),
+    type: 'adjustment',
+    quantity: -t.quantity,
+    unitPrice: null,
+    totalAmount: null,
+    customerId: null,
+    sessionId: null,
+    notes: `調貨出庫 → ${toVenue.name}`,
+    operatedAt: new Date().toISOString(),
+    productName: product.name,
+    operatorName: getAdminActor().name,
+    customerName: undefined,
+  })
+
+  // 更新 transfer 狀態
+  _patchProductTransfer_s5(transferId, { status: 'in_transit' })
+
+  writeAudit({
+    actor: getAdminActor(),
+    venue: fromVenue.name,
+    action: 'PRODUCT_TRANSFER_SHIPPED',
+    entityType: 'ProductTransfer',
+    entityId: transferId,
+    targetLabel: product.name,
+    detail: `出貨：${fromVenue.name} 扣庫存 ${t.quantity}，運送中`,
+    oldValues: { status: 'pending' },
+    newValues: { status: 'in_transit', step: 'shipped' },
+  })
+
+  return { ok: true }
+}
+
+/** 收貨確認：in_transit → completed。加 to 館庫存 + 寫 adjustment Tx。 */
+export function receiveProductTransfer(transferId: string): { ok: true } | { ok: false; reason: string } {
+  const t = _getAllTransfers_s5().find(x => x.id === transferId)
+  if (!t) return { ok: false, reason: '找不到調貨單' }
+  if (t.status !== 'in_transit') return { ok: false, reason: `當前狀態為 ${PRODUCT_TRANSFER_STATUS_LABEL[t.status]}` }
+
+  const product = GENERATED.products.find(p => p.id === t.productId)
+  const fromVenue = GENERATED.venues.find(v => v.id === t.fromVenueId)
+  const toVenue = GENERATED.venues.find(v => v.id === t.toVenueId)
+  if (!product || !fromVenue || !toVenue) return { ok: false, reason: '資料不完整' }
+
+  // 收貨：加 to 庫存
+  const toVp = GENERATED.venueProducts.find(vp => vp.venueId === t.toVenueId)
+  const toProduct = toVp?.products.find(p => p.name === product.name)
+  if (!toProduct) return { ok: false, reason: `${toVenue.name} 未上架此商品` }
+  ;(toProduct as unknown as { currentStock: number }).currentStock = toProduct.currentStock + t.quantity
+
+  // 寫 adjustment Tx（入庫）
+  _addProductTransaction_s5({
+    id: genId('pt'),
+    productId: t.productId,
+    venueId: t.toVenueId,
+    operatedBy: getCurrentUserId(),
+    type: 'adjustment',
+    quantity: t.quantity,
+    unitPrice: null,
+    totalAmount: null,
+    customerId: null,
+    sessionId: null,
+    notes: `調貨入庫 ← ${fromVenue.name}`,
+    operatedAt: new Date().toISOString(),
+    productName: product.name,
+    operatorName: getAdminActor().name,
+    customerName: undefined,
+  })
+
+  // 更新 transfer 狀態
+  const completedAt = new Date().toISOString()
+  _patchProductTransfer_s5(transferId, { status: 'completed', completedAt })
+
+  writeAudit({
+    actor: getAdminActor(),
+    venue: toVenue.name,
+    action: 'PRODUCT_TRANSFER_RECEIVED',
+    entityType: 'ProductTransfer',
+    entityId: transferId,
+    targetLabel: product.name,
+    detail: `收貨：${toVenue.name} 加庫存 ${t.quantity}，調貨完成`,
+    oldValues: { status: 'in_transit' },
+    newValues: { status: 'completed', step: 'received', completedAt },
+  })
+
+  return { ok: true }
+}
+
+/** 取消調貨：任何狀態 → cancelled。注意：若已 in_transit，from 館庫存不會自動退回。 */
+export function cancelProductTransfer(
+  transferId: string,
+  reason?: string,
+): { ok: true } | { ok: false; reason: string } {
+  const t = _getAllTransfers_s5().find(x => x.id === transferId)
+  if (!t) return { ok: false, reason: '找不到調貨單' }
+  if (t.status === 'completed') return { ok: false, reason: '已完成的調貨無法取消，請開新的逆向調貨' }
+  if (t.status === 'cancelled') return { ok: false, reason: '已取消' }
+
+  const product = GENERATED.products.find(p => p.id === t.productId)
+  const fromVenue = GENERATED.venues.find(v => v.id === t.fromVenueId)
+  const toVenue = GENERATED.venues.find(v => v.id === t.toVenueId)
+  const prevStatus = t.status
+
+  _patchProductTransfer_s5(transferId, { status: 'cancelled' })
+
+  writeAudit({
+    actor: getAdminActor(),
+    venue: fromVenue && toVenue ? `${fromVenue.name} → ${toVenue.name}` : null,
+    action: 'PRODUCT_TRANSFER_CANCELLED',
+    entityType: 'ProductTransfer',
+    entityId: transferId,
+    targetLabel: product?.name ?? '?',
+    detail: prevStatus === 'in_transit'
+      ? `取消（運送中取消，${fromVenue?.name} 已扣的庫存需另開逆向調貨補回）${reason ? `：${reason}` : ''}`
+      : `取消${reason ? `：${reason}` : ''}`,
+    oldValues: { status: prevStatus },
+    newValues: { status: 'cancelled', step: 'cancelled', reason: reason ?? null },
+  })
+
+  return { ok: true }
+}
+
+
+// ============================================================
+// 十三、上傳憑證 store（階段 8 Part A）
+// ============================================================
+// 自助回報「轉帳截圖」階段 5 只存字串檔名（self-checkin 頁第 338 行
+// 還寫著「demo 用：實際 production 應上傳檔案到對象存儲」）。
+// 階段 8 把它換成真實檔案 store：
+//
+//   - Blob 本體：data/evidence-store.ts 的 IndexedDB
+//   - Metadata：PersistedDiff.evidenceMetadata（隨 localStorage 一起 hydrate）
+//   - 兩邊用 UploadedEvidence.id 串
+//
+// 為了向後相容，Registration.selfPaymentEvidence 仍然是 `string | null`，
+// 但語意改為「若以 `evd_` 前綴 → IndexedDB blob id；否則為 legacy
+// 字串（檔名 / URL）」。Preview 元件偵測前綴決定渲染方式。
+// ============================================================
+
+import type { UploadedEvidence, EvidenceSourceType } from '@/types'
+export type { EvidenceSourceType } from '@/types'
+export { EVIDENCE_SOURCE_LABEL } from '@/types'
+import {
+  addEvidenceMeta, getEvidenceMetadata, markEvidenceBlobDeleted,
+} from './store'
+import {
+  putEvidence as _putEvidenceBlob,
+  deleteEvidence as _deleteEvidenceBlob,
+  getEvidenceObjectUrl as _getEvidenceObjectUrlRaw,
+  isEvidenceStoreAvailable,
+} from './evidence-store'
+export { isEvidenceStoreAvailable } from './evidence-store'
+
+// ── 13.1 helpers ─────────────────────────────────────────────
+
+const EVIDENCE_ID_PREFIX = 'evd'
+
+function genEvidenceId(): string {
+  // 與 genId 同形狀，但 prefix 鎖死讓 isEvidenceId 可單純前綴判斷
+  const r = Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, '0')
+  return `${EVIDENCE_ID_PREFIX}_${Date.now().toString(36)}_${r}`
+}
+
+/**
+ * 判斷一個字串是否為憑證 id（即「IndexedDB 內有 blob」的形式）。
+ *
+ * 向後相容：Registration.selfPaymentEvidence 在階段 5-7 是純檔名字串
+ * （例：'transfer_0511.jpg'）；階段 8 起新上傳都用 'evd_xxx' id。
+ * Preview 元件用此 helper 決定渲染策略：
+ *   - true  → 從 IndexedDB 抓 blob 顯示圖片
+ *   - false → 純文字 fallback（legacy 字串檔名）
+ */
+export function isEvidenceId(s: string | null | undefined): s is string {
+  return typeof s === 'string' && s.startsWith(`${EVIDENCE_ID_PREFIX}_`)
+}
+
+/** 取得單筆 evidence meta；找不到回 null */
+export function getEvidenceMeta(id: string): UploadedEvidence | null {
+  return getEvidenceMetadata().find(e => e.id === id) ?? null
+}
+
+// ── 13.2 Queries ─────────────────────────────────────────────
+
+export interface EvidenceListFilter {
+  sourceType?: EvidenceSourceType | 'all'
+  /** 是否含已刪除（blobAvailable=false）— 預設不含 */
+  includeDeleted?: boolean
+}
+
+/**
+ * Admin 列表：列出所有上傳憑證的 meta。
+ *
+ * 預設依 uploadedAt **降冪**（最新在前），方便 admin 頁直接渲染。
+ */
+export function listAllEvidence(filter: EvidenceListFilter = {}): UploadedEvidence[] {
+  const src         = filter.sourceType    ?? 'all'
+  const incDeleted  = filter.includeDeleted ?? false
+  return getEvidenceMetadata()
+    .filter(e => (src === 'all' || e.sourceType === src))
+    .filter(e => (incDeleted || e.blobAvailable))
+    .slice() // 不污染原陣列
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+}
+
+/**
+ * 取得 blob 的 object URL（用於 <img src=>）。
+ *
+ * caller **必須** 在 unmount 時呼叫 `URL.revokeObjectURL(url)`
+ * 釋放，否則會洩漏記憶體。建議模式：
+ *
+ *   useEffect(() => {
+ *     let url: string | null = null
+ *     getEvidenceObjectUrl(id).then(u => { url = u; setSrc(u) })
+ *     return () => { if (url) URL.revokeObjectURL(url) }
+ *   }, [id])
+ */
+export async function getEvidenceObjectUrl(id: string): Promise<string | null> {
+  if (!isEvidenceStoreAvailable()) return null
+  try {
+    return await _getEvidenceObjectUrlRaw(id)
+  } catch {
+    return null
+  }
+}
+
+// ── 13.3 Mutations ───────────────────────────────────────────
+
+export interface UploadEvidenceArgs {
+  blob: Blob
+  filename: string
+  sourceType: EvidenceSourceType
+  sourceId: string
+  /** 上傳者顯示名（顧客名 / 員工名）*/
+  uploadedByName: string
+}
+
+export type UploadEvidenceResult =
+  | { ok: true; id: string; meta: UploadedEvidence }
+  | { ok: false; reason: string }
+
+/**
+ * 上傳一筆憑證：blob → IndexedDB；meta → store；audit log → 'UPLOAD_EVIDENCE'。
+ *
+ * 寫入順序：先 blob 再 meta（若 blob 失敗，整體 fast-fail 不留 meta）。
+ *
+ * audit actor：若 sourceType='self_payment'，actor 是 'captain' 類型
+ * （客戶端自助上傳，與 customerReportSelfPayment 對齊）。其他來源用
+ * admin actor。未來新增 sourceType 時記得 review 這個分流。
+ */
+export async function uploadEvidence(
+  args: UploadEvidenceArgs,
+): Promise<UploadEvidenceResult> {
+  if (!isEvidenceStoreAvailable()) {
+    return { ok: false, reason: '此瀏覽器不支援 IndexedDB（無法存上傳檔）' }
+  }
+  if (args.blob.size === 0) {
+    return { ok: false, reason: '檔案大小為 0' }
+  }
+  const MAX_SIZE = 10 * 1024 * 1024 // 10MB
+  if (args.blob.size > MAX_SIZE) {
+    return { ok: false, reason: `檔案過大（${(args.blob.size / 1024 / 1024).toFixed(1)} MB > 10 MB 上限）` }
+  }
+
+  const id = genEvidenceId()
+  try {
+    await _putEvidenceBlob(id, args.blob)
+  } catch (e) {
+    return { ok: false, reason: `寫入 IndexedDB 失敗：${(e as Error).message}` }
+  }
+
+  const meta: UploadedEvidence = {
+    id,
+    sourceType: args.sourceType,
+    sourceId: args.sourceId,
+    filename: args.filename,
+    mimeType: args.blob.type || 'application/octet-stream',
+    size: args.blob.size,
+    uploadedByName: args.uploadedByName,
+    uploadedAt: new Date().toISOString(),
+    blobAvailable: true,
+  }
+  addEvidenceMeta(meta)
+
+  // audit log
+  const isSelfPayment = args.sourceType === 'self_payment'
+  const venue: string | null = (() => {
+    if (!isSelfPayment) return null
+    // 從 sourceId (=Registration.id) 反查場館名（best-effort）
+    const reg = GENERATED.registrations.find(r => r.id === args.sourceId)
+    if (!reg) return null
+    const session = GENERATED.sessions.find(s => s.id === reg.sessionId)
+    if (!session) return null
+    return GENERATED.venues.find(v => v.id === session.venueId)?.name ?? null
+  })()
+  writeAudit({
+    actor: isSelfPayment
+      ? { type: 'captain', id: args.sourceId, name: args.uploadedByName }
+      : getAdminActor(),
+    venue,
+    action: 'UPLOAD_EVIDENCE',
+    entityType: 'UploadedEvidence',
+    entityId: id,
+    targetLabel: args.uploadedByName,
+    detail: `${args.filename}（${(args.blob.size / 1024).toFixed(1)} KB · ${meta.mimeType}）`,
+    newValues: {
+      sourceType: args.sourceType,
+      sourceId: args.sourceId,
+      size: args.blob.size,
+      mimeType: meta.mimeType,
+    },
+  })
+
+  return { ok: true, id, meta }
+}
+
+/**
+ * Admin 刪除憑證：刪 IndexedDB blob、把 meta 標記為 blobAvailable=false
+ * （不真的移除 meta，保留 audit 軌跡）、寫 'DELETE_EVIDENCE' audit log。
+ *
+ * 找不到 meta → 視為已刪除（idempotent）；不報錯，只回 ok=false 帶 reason。
+ */
+export async function deleteEvidenceById(id: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const meta = getEvidenceMeta(id)
+  if (!meta) return { ok: false, reason: '找不到此憑證' }
+  if (!meta.blobAvailable) return { ok: false, reason: '此憑證已刪除' }
+
+  try {
+    await _deleteEvidenceBlob(id)
+  } catch (e) {
+    return { ok: false, reason: `刪除 IndexedDB blob 失敗：${(e as Error).message}` }
+  }
+  markEvidenceBlobDeleted(id)
+
+  writeAudit({
+    actor: getAdminActor(),
+    venue: null,
+    action: 'DELETE_EVIDENCE',
+    entityType: 'UploadedEvidence',
+    entityId: id,
+    targetLabel: meta.filename,
+    detail: `刪除（${meta.sourceType} / ${(meta.size / 1024).toFixed(1)} KB）`,
+    oldValues: { blobAvailable: true, size: meta.size },
+    newValues: { blobAvailable: false },
+  })
+  return { ok: true }
+}
+
+
+// ============================================================
+// 十四、衝突偵測 — 樂觀鎖 snapshot 比對（階段 8 Part B）
+// ============================================================
+// Mutation 接受可選參數 `baseUpdatedAt`（caller 在 UI 載入 entity
+// 時記下的 entity.updatedAt）。執行 mutation 前比對當下 entity 的
+// updatedAt：
+//
+//   - 不傳 baseUpdatedAt → 「強制覆蓋」（向後相容；既有呼叫端不變）
+//   - 傳了且相符 → 正常執行
+//   - 傳了但不符 → 不執行 mutation，return ConflictResult，
+//                  並寫一筆 'CONFLICT_DETECTED' audit log
+//
+// 階段 8 範圍：示範性套用 3 個關鍵 mutation：
+//   - adminRegenerateToken
+//   - adminDeactivateRental
+//   - cancelSession（新增）
+//
+// 其他 mutation 暫不套用（避免改動爆炸；未來階段可逐步擴大）。
+// ============================================================
+
+import type { ConflictResult } from '@/types'
+
+/**
+ * snapshot 比對 helper。
+ *
+ * 用法：
+ *   const conflict = checkBaseUpdatedAt(
+ *     entity, baseUpdatedAt, { entityType, entityId, actor, targetLabel, attemptedPatch }
+ *   )
+ *   if (conflict) return conflict
+ *   // 通過 → 繼續執行正常 mutation
+ *
+ * 不符時會自動寫 'CONFLICT_DETECTED' audit log（包含試圖寫入的 patch
+ * + 當下 entity 的 updatedAt），方便事後追查衝突。
+ */
+function checkBaseUpdatedAt(
+  entity: { updatedAt: string },
+  baseUpdatedAt: string | undefined,
+  ctx: {
+    entityType: string
+    entityId: string
+    actor: AuditActor
+    venue: string | null
+    targetLabel: string
+    attemptedPatch: Record<string, unknown>
+  },
+): ConflictResult | null {
+  if (baseUpdatedAt === undefined) return null  // 強制覆蓋
+  if (baseUpdatedAt === entity.updatedAt) return null  // 一致，pass
+
+  // 不一致 → 推 audit log + return conflict result
+  // 從最近一筆同 entity 的 audit log 推 lastEditedBy（best-effort）
+  const lastEdit = getAuditLogs()
+    .slice()
+    .reverse()
+    .find(l => l.entityType === ctx.entityType && l.entityId === ctx.entityId && l.action !== 'CONFLICT_DETECTED')
+  const lastEditedBy = lastEdit?.actorName ?? null
+
+  writeAudit({
+    actor: ctx.actor,
+    venue: ctx.venue,
+    action: 'CONFLICT_DETECTED',
+    entityType: ctx.entityType,
+    entityId: ctx.entityId,
+    targetLabel: ctx.targetLabel,
+    detail: `樂觀鎖衝突：嘗試以 base=${baseUpdatedAt.slice(11, 19)} 寫入，但目前 entity 為 ${entity.updatedAt.slice(11, 19)}${lastEditedBy ? `（最後修改：${lastEditedBy}）` : ''}`,
+    oldValues: { currentUpdatedAt: entity.updatedAt, lastEditedBy },
+    newValues: { baseUpdatedAt, attemptedPatch: ctx.attemptedPatch },
+  })
+
+  return {
+    ok: false,
+    conflict: true,
+    reason: lastEditedBy
+      ? `此資料已被「${lastEditedBy}」修改過，請重新載入後再試`
+      : '此資料已被他人修改，請重新載入後再試',
+    currentUpdatedAt: entity.updatedAt,
+    lastEditedBy,
+  }
+}
+
+/**
+ * 取消場次（階段 8 新增的 mutation）。
+ *
+ * 與既有 adminRegenerateToken / adminDeactivateRental 同模式：
+ *   - status: 'open' / 'full' → 'cancelled'
+ *   - 可選 baseUpdatedAt 提供樂觀鎖保護
+ *   - 觸發 'CANCEL_SESSION' audit log（這個 action 在 union 內存
+ *     在已久但階段 8 前無人寫入）
+ *
+ * 不處理該場已存在的 Registration（demo 簡化；production 應自動
+ * 取消所有 walk_in、退費等）。
+ */
+export function cancelSession(
+  sessionId: string,
+  opts: { reason: string; baseUpdatedAt?: string },
+): { ok: true } | { ok: false; reason: string } | ConflictResult {
+  const s = GENERATED.sessions.find(x => x.id === sessionId)
+  if (!s) return { ok: false, reason: '找不到場次' }
+  if (s.status === 'cancelled')  return { ok: false, reason: '此場次已取消' }
+  if (s.status === 'completed')  return { ok: false, reason: '已完成的場次無法取消' }
+
+  const venueName = GENERATED.venues.find(v => v.id === s.venueId)?.name ?? null
+  const actor = getAdminActor()
+  const targetLabel = `${s.sessionDate} ${s.startTime} @ ${venueName ?? '?'}`
+
+  const conflict = checkBaseUpdatedAt(s, opts.baseUpdatedAt, {
+    entityType: 'Session',
+    entityId: sessionId,
+    actor,
+    venue: venueName,
+    targetLabel,
+    attemptedPatch: { status: 'cancelled', reason: opts.reason },
+  })
+  if (conflict) return conflict
+
+  const prevStatus = s.status
+  s.status = 'cancelled'
+  s.updatedAt = new Date().toISOString()
+
+  writeAudit({
+    actor,
+    venue: venueName,
+    action: 'CANCEL_SESSION',
+    entityType: 'Session',
+    entityId: sessionId,
+    targetLabel,
+    detail: `取消場次${opts.reason ? `：${opts.reason}` : ''}`,
+    oldValues: { status: prevStatus, updatedAt: s.updatedAt },
+    newValues: { status: 'cancelled', reason: opts.reason },
+  })
+
+  return { ok: true }
+}

@@ -22,6 +22,8 @@ const SUBPAGES: {
   { href: '/reconciliation/sessions',       icon: '📅', title: '場次對帳',   desc: '逐場應收 vs 實收，標出少收場次', accent: '#2563eb' },
   { href: '/reconciliation/season-rentals', icon: '🎫', title: '季租單對帳', desc: '主揪繳款狀況、欠款警示',         accent: '#d4a843' },
   { href: '/reconciliation/products',       icon: '📦', title: '商品對帳',   desc: '銷售/贈送比例、各館分布',        accent: '#7c6af7' },
+  { href: '/reconciliation/unattended',     icon: '🚪', title: '無人場次',   desc: '自助回報 vs 實付，可疑客戶名單',  accent: '#f59e0b' },
+  { href: '/reconciliation/honest-shop',    icon: '💰', title: '誠實商店',   desc: '投錢箱盤點，缺口與匿名比例',     accent: '#a16207' },
   { href: '/reconciliation/monthly',        icon: '📊', title: '月結對帳',   desc: '老闆對帳視角，月/季切換',        accent: '#10b981' },
   { href: '/reconciliation/anomalies',      icon: '⚠️',  title: '異常清單',   desc: '所有需要追蹤的差異一覽',         accent: '#e85d3a' },
 ]

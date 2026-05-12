@@ -585,7 +585,7 @@ for (const session of SESSIONS) {
 // ── 12. Products & ProductTransactions ───────────────────────
 
 const PRODUCTS: Product[] = [
-  { id: 'p1', venueId: null, name: '運動飲料', sku: 'DRK-001', unitPrice: 35,  currentStock: 35, lowStockThreshold: 5,  isActive: true, createdAt: '2022-01-01T00:00:00Z' },
+  { id: 'p1', venueId: null, name: '運動飲料', sku: 'DRK-001', unitPrice: 35,  currentStock: 35, lowStockThreshold: 5,  isActive: true, isHonestShop: true, createdAt: '2022-01-01T00:00:00Z' },
   { id: 'p2', venueId: null, name: '護膝',     sku: 'EQP-001', unitPrice: 280, currentStock: 22, lowStockThreshold: 5,  isActive: true, createdAt: '2022-01-01T00:00:00Z' },
   { id: 'p3', venueId: null, name: '排球',     sku: 'EQP-002', unitPrice: 850, currentStock: 16, lowStockThreshold: 3,  isActive: true, createdAt: '2022-01-01T00:00:00Z' },
   { id: 'p4', venueId: 'v1', name: '球魔方帽', sku: 'MRK-001', unitPrice: 250, currentStock: 24, lowStockThreshold: 10, isActive: true, createdAt: '2023-06-01T00:00:00Z' },

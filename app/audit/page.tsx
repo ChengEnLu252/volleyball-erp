@@ -36,6 +36,20 @@ const ACTION_STYLE: Record<AuditAction, ActionStyle> = {
   // 階段 3 production 新增 ────────────
   UNCANCEL_REGISTRATION:      { label: '取消請假',      color: '#166534', bg: '#dcfce7' },
   COPY_CAPTAIN_TOKEN:         { label: '複製連結',      color: '#6b7280', bg: '#f3f4f6' },
+  // 階段 6（補階段 5 留下的 cast）─────
+  SEND_SELF_REPORT_REMINDER:  { label: '發回報提醒',    color: '#a16207', bg: '#fef9c3' },
+  // 階段 7（拆 PRODUCT_TRANSFER 為 4 個 phase）紫色系變化 ─
+  PRODUCT_TRANSFER_CREATED:   { label: '調貨：申請',    color: '#7c3aed', bg: '#ede9fe' },
+  PRODUCT_TRANSFER_SHIPPED:   { label: '調貨：出貨',    color: '#4338ca', bg: '#e0e7ff' },
+  PRODUCT_TRANSFER_RECEIVED:  { label: '調貨：收貨',    color: '#5b21b6', bg: '#ddd6fe' },
+  PRODUCT_TRANSFER_CANCELLED: { label: '調貨：取消',    color: '#991b1b', bg: '#fee2e2' },
+  // 階段 8（憑證 store + 衝突偵測）─────────
+  // 憑證：上傳走青色（與 SELF_PAYMENT_REPORT 同色系；常一起發生）
+  //       刪除走紅色（破壞性）
+  // 衝突：橘色突出，提醒老闆「有競態狀況」
+  UPLOAD_EVIDENCE:            { label: '上傳憑證',      color: '#0e7490', bg: '#cffafe' },
+  DELETE_EVIDENCE:            { label: '刪除憑證',      color: '#991b1b', bg: '#fee2e2' },
+  CONFLICT_DETECTED:          { label: '⚠ 樂觀鎖衝突',  color: '#9a3412', bg: '#ffedd5' },
 }
 
 const DEFAULT_STYLE: ActionStyle = { label: '其他', color: '#6b7280', bg: '#f3f4f6' }

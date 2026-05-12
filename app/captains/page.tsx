@@ -19,7 +19,8 @@ import { useStoreSync } from '@/data/store'
 import {
   ReconHeader, StatCard, Panel, Badge, Money, ProgressBar, FilterButtons, VENUE_COLOR,
 } from '@/components/reconciliation/Common'
-import type { SeasonRentalStatus, Timeslot, Customer, Season } from '@/types'
+import type { SeasonRentalStatus, Timeslot, Customer, Season, ConflictResult } from '@/types'
+import ConflictBanner from '@/components/ConflictBanner'
 
 const STATUS_LABEL: Record<SeasonRentalStatus, string> = {
   pending:   '待繳款',
@@ -237,6 +238,24 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
 
   const fullUrl = `https://volleyball-erp.vercel.app${captainUrl}`
 
+  // ── 階段 8：樂觀鎖 snapshot ─────────────────────────
+  // mount 時記下 updatedAt 當 base；後續 mutation 帶此 base 比對。
+  // useEffect 在「沒有 active conflict 且 row.updatedAt 真的變了」時
+  // 同步更新 base — 這樣自己改成功會同步，但衝突時 base 不會被覆蓋。
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string>(rental.updatedAt)
+  const [conflict, setConflict] = useState<ConflictResult | null>(null)
+
+  useEffect(() => {
+    if (!conflict && rental.updatedAt !== baseUpdatedAt) {
+      setBaseUpdatedAt(rental.updatedAt)
+    }
+  }, [rental.updatedAt, conflict, baseUpdatedAt])
+
+  const reloadSnapshot = () => {
+    setConflict(null)
+    setBaseUpdatedAt(rental.updatedAt)
+  }
+
   const handleCopy = () => {
     const finish = () => adminLogCopyToken(rental.id)
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -254,8 +273,13 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
       `確定要重發 ${rental.captainName} 的 token？\n\n` +
       `舊連結會立即失效，主揪需用新連結才能登入。`
     )) return
-    const r = adminRegenerateToken(rental.id)
+    const r = adminRegenerateToken(rental.id, { baseUpdatedAt })
     if (!r.ok) {
+      // 階段 8：先檢查是否衝突；衝突走 banner，其他錯誤走 alert
+      if ('conflict' in r && r.conflict) {
+        setConflict(r)
+        return
+      }
       alert(`⚠️ ${r.reason}`)
       return
     }
@@ -277,8 +301,12 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
       `此季租單會標記為 cancelled，token 立即失效。\n` +
       `主揪剩餘場次的季打人員資格將被取消。`
     )) return
-    const r = adminDeactivateRental(rental.id)
+    const r = adminDeactivateRental(rental.id, { baseUpdatedAt })
     if (!r.ok) {
+      if ('conflict' in r && r.conflict) {
+        setConflict(r)
+        return
+      }
       alert(`⚠️ ${r.reason}`)
       return
     }
@@ -297,6 +325,14 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
       borderLeft: `4px solid ${isCritical ? '#dc2626' : accent}`,
       overflow: 'hidden',
     }}>
+      {conflict && (
+        <div style={{ padding: '12px 12px 0' }}>
+          <ConflictBanner
+            conflict={conflict}
+            onReload={reloadSnapshot}
+          />
+        </div>
+      )}
       <div style={{ padding: '14px 16px 10px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
           <div style={{ minWidth: 0, flex: 1 }}>

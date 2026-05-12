@@ -33,6 +33,8 @@ export type PageKey =
   | 'performance'
   | 'audit'
   | 'integrations'
+  // 階段 8：上傳憑證 admin 列表
+  | 'evidence'
 
 export const PAGE_LABEL: Record<PageKey, string> = {
   'dashboard':        '總覽',
@@ -47,6 +49,7 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'performance':      '館長績效',
   'audit':            '操作紀錄',
   'integrations':     '整合設定',
+  'evidence':         '上傳憑證',
 }
 
 
@@ -96,6 +99,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'performance':      { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   'audit':            { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
   'integrations':     { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
+  // 階段 8：上傳憑證列表 — 與 audit 同層級，owner 限定（檔內含敏感截圖）
+  'evidence':         { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
 }
 
 
