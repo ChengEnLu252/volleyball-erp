@@ -50,6 +50,9 @@ const ACTION_STYLE: Record<AuditAction, ActionStyle> = {
   UPLOAD_EVIDENCE:            { label: '上傳憑證',      color: '#0e7490', bg: '#cffafe' },
   DELETE_EVIDENCE:            { label: '刪除憑證',      color: '#991b1b', bg: '#fee2e2' },
   CONFLICT_DETECTED:          { label: '⚠ 樂觀鎖衝突',  color: '#9a3412', bg: '#ffedd5' },
+  // 階段 10（退費鏈）— 綠色「退錢出去」、灰色「不退」明確區分
+  ISSUE_REFUND:               { label: '💰 開退費',     color: '#166534', bg: '#dcfce7' },
+  WAIVE_REFUND:               { label: '放棄退費',      color: '#6b7280', bg: '#f3f4f6' },
 }
 
 const DEFAULT_STYLE: ActionStyle = { label: '其他', color: '#6b7280', bg: '#f3f4f6' }

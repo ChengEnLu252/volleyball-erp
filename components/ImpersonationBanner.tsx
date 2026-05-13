@@ -10,7 +10,7 @@ import { hydrateStore, useStoreSync } from '@/data/store'
 /**
  * 切視角橫幅 — owner 切到非自身視角時頂部顯示。
  *
- * Demo 期望：陳老闆（u1，REAL_USER_ID）在 Sidebar dropdown 切到工讀生時，
+ * Demo 期望：王家凱（u1，REAL_USER_ID）在 Sidebar dropdown 切到工讀生時，
  * 頁面上方出現「您正以 工讀生 · 飛翼 視角檢視 · [回到 owner]」
  *
  * SSR 階段不 render（避免水合不一致）。

@@ -6,12 +6,13 @@ import type { AnomalySeverity } from '@/data/api'
 // ── 常數 ────────────────────────────────────────────────────
 
 export const VENUE_COLOR: Record<string, string> = {
-  v1: '#7c6af7',  // 球魔方
-  v2: '#0ea5e9',  // Ace
+  v1: '#7c6af7',  // 球魔方 2.0
+  v2: '#0ea5e9',  // Ace 2.0
   v3: '#f59e0b',  // 飛翼
-  v4: '#10b981',  // 日日
-  v5: '#f43f5e',  // Playone
+  v4: '#10b981',  // Hibi 日日
+  v5: '#f43f5e',  // play one
   v6: '#06b6d4',  // 就醬瘋
+  v7: '#8b5cf6',  // Ace 3.0
 }
 
 export const SEVERITY_COLOR: Record<AnomalySeverity, { bg: string; fg: string; border: string }> = {

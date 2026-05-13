@@ -10,13 +10,19 @@ import {
   receiveProductTransfer,
   cancelProductTransfer,
   listVenues,
+  listAllEvidence,
+  getCurrentUser,
   type ProductTransferRow,
   type TransferSuggestion,
-  type ProductTransferStatus,
 } from '@/data/api'
 import { useStoreSync, hydrateStore } from '@/data/store'
 import { Badge, VENUE_COLOR } from '@/components/reconciliation/Common'
 import { GENERATED } from '@/data/generator'
+// 階段 9：型別直接從 '@/types' import（不再經 '@/data/api' 的 re-export）
+import type { ProductTransferStatus, ConflictResult, UploadedEvidence } from '@/types'
+import ConflictBanner from '@/components/ConflictBanner'
+import EvidenceUpload from '@/components/EvidenceUpload'
+import EvidencePreview from '@/components/EvidencePreview'
 
 
 // ── 顯示 helpers ─────────────────────────────────────────────
@@ -273,36 +279,7 @@ function TransfersTable({ transfers }: { transfers: ProductTransferRow[] }) {
           </thead>
           <tbody>
             {transfers.map(t => (
-              <tr key={t.id} className="xfer-row" style={{ borderBottom: '1px solid #f5f4f0' }}>
-                <td style={{ padding: '10px', textAlign: 'center' }}>
-                  <Badge color={STATUS_BADGE[t.status]}>{t.statusLabel}</Badge>
-                </td>
-                <td style={{ padding: '10px' }}>
-                  <strong>{t.productName}</strong>
-                  <span style={{ color: '#666', marginLeft: 6 }}>× {t.quantity}</span>
-                  {t.notes && <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>💬 {t.notes}</div>}
-                </td>
-                <td style={{ padding: '10px' }}>
-                  <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 999, background: VENUE_COLOR[t.fromVenueId] ?? '#aaa', marginRight: 6 }} />
-                  {t.fromVenueName}
-                  <div style={{ fontSize: 10, color: '#aaa' }}>剩 {t.fromVenueCurrentStock}</div>
-                </td>
-                <td style={{ padding: '10px' }}>
-                  <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 999, background: VENUE_COLOR[t.toVenueId] ?? '#aaa', marginRight: 6 }} />
-                  {t.toVenueName}
-                  <div style={{ fontSize: 10, color: '#aaa' }}>剩 {t.toVenueCurrentStock}</div>
-                </td>
-                <td style={{ padding: '10px', fontSize: 12, color: '#666' }}>
-                  {t.requestedByName}
-                </td>
-                <td style={{ padding: '10px', fontSize: 11, color: '#888' }}>
-                  申請 {fmtTime(t.requestedAt)}
-                  {t.completedAt && <div>完成 {fmtTime(t.completedAt)}</div>}
-                </td>
-                <td style={{ padding: '10px', textAlign: 'right' }}>
-                  <TransferActionButtons transfer={t} />
-                </td>
-              </tr>
+              <TransferRow key={t.id} transfer={t} />
             ))}
           </tbody>
         </table>
@@ -312,74 +289,239 @@ function TransfersTable({ transfers }: { transfers: ProductTransferRow[] }) {
 }
 
 
+// ── 單筆調貨 row（含樂觀鎖 + 簽收照） ────────────────────────
+
+function TransferRow({ transfer }: { key?: string | number; transfer: ProductTransferRow }) {
+  // 階段 9：每張 transfer card 各自的 baseUpdatedAt snapshot + conflict 狀態
+  // 雙開分頁、多人同時管出貨/收貨 等場景的樂觀鎖保護
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string>(transfer.updatedAt)
+  const [conflict, setConflict] = useState<ConflictResult | null>(null)
+  useEffect(() => {
+    if (!conflict && transfer.updatedAt !== baseUpdatedAt) {
+      setBaseUpdatedAt(transfer.updatedAt)
+    }
+  }, [transfer.updatedAt, conflict, baseUpdatedAt])
+  const reloadSnapshot = () => {
+    setConflict(null)
+    setBaseUpdatedAt(transfer.updatedAt)
+  }
+
+  // 簽收照 UI 展開/收合
+  const [evidenceOpen, setEvidenceOpen] = useState(false)
+
+  return (
+    <>
+      <tr className="xfer-row" style={{ borderBottom: conflict ? 'none' : '1px solid #f5f4f0' }}>
+        <td style={{ padding: '10px', textAlign: 'center' }}>
+          <Badge color={STATUS_BADGE[transfer.status]}>{transfer.statusLabel}</Badge>
+        </td>
+        <td style={{ padding: '10px' }}>
+          <strong>{transfer.productName}</strong>
+          <span style={{ color: '#666', marginLeft: 6 }}>× {transfer.quantity}</span>
+          {transfer.notes && <div style={{ fontSize: 11, color: '#aaa', marginTop: 2 }}>💬 {transfer.notes}</div>}
+        </td>
+        <td style={{ padding: '10px' }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 999, background: VENUE_COLOR[transfer.fromVenueId] ?? '#aaa', marginRight: 6 }} />
+          {transfer.fromVenueName}
+          <div style={{ fontSize: 10, color: '#aaa' }}>剩 {transfer.fromVenueCurrentStock}</div>
+        </td>
+        <td style={{ padding: '10px' }}>
+          <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 999, background: VENUE_COLOR[transfer.toVenueId] ?? '#aaa', marginRight: 6 }} />
+          {transfer.toVenueName}
+          <div style={{ fontSize: 10, color: '#aaa' }}>剩 {transfer.toVenueCurrentStock}</div>
+        </td>
+        <td style={{ padding: '10px', fontSize: 12, color: '#666' }}>
+          {transfer.requestedByName}
+        </td>
+        <td style={{ padding: '10px', fontSize: 11, color: '#888' }}>
+          申請 {fmtTime(transfer.requestedAt)}
+          {transfer.completedAt && <div>完成 {fmtTime(transfer.completedAt)}</div>}
+        </td>
+        <td style={{ padding: '10px', textAlign: 'right' }}>
+          <TransferActionButtons
+            transfer={transfer}
+            baseUpdatedAt={baseUpdatedAt}
+            onConflict={setConflict}
+            evidenceOpen={evidenceOpen}
+            onToggleEvidence={() => setEvidenceOpen(o => !o)}
+          />
+        </td>
+      </tr>
+
+      {/* 衝突 banner（橫跨整列） */}
+      {conflict && (
+        <tr style={{ borderBottom: '1px solid #f5f4f0' }}>
+          <td colSpan={7} style={{ padding: '8px 10px', background: '#fff' }}>
+            <ConflictBanner conflict={conflict} onReload={reloadSnapshot} />
+          </td>
+        </tr>
+      )}
+
+      {/* 簽收照展開區（橫跨整列） */}
+      {evidenceOpen && (
+        <tr style={{ borderBottom: '1px solid #f5f4f0' }}>
+          <td colSpan={7} style={{ padding: '12px', background: '#fafaf7' }}>
+            <TransferEvidenceSection transfer={transfer} />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+
 // ── 動作按鈕 ──────────────────────────────────────────────────
 
-function TransferActionButtons({ transfer }: { transfer: ProductTransferRow }) {
+function TransferActionButtons({
+  transfer, baseUpdatedAt, onConflict, evidenceOpen, onToggleEvidence,
+}: {
+  transfer: ProductTransferRow
+  baseUpdatedAt: string
+  onConflict: (c: ConflictResult) => void
+  evidenceOpen: boolean
+  onToggleEvidence: () => void
+}) {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  // 統一處理 mutation 結果：成功 / 一般錯誤 / 樂觀鎖衝突
+  function handleResult(r: { ok: true } | { ok: false; reason: string } | ConflictResult) {
+    setBusy(false)
+    if (r.ok) return
+    if ('conflict' in r && r.conflict) {
+      onConflict(r)
+      return
+    }
+    setErr(r.reason)
+  }
+
   function doShip() {
     setBusy(true); setErr(null)
-    const r = shipProductTransfer(transfer.id)
-    setBusy(false)
-    if (!r.ok) setErr(r.reason)
+    handleResult(shipProductTransfer(transfer.id, { baseUpdatedAt }))
   }
   function doReceive() {
     setBusy(true); setErr(null)
-    const r = receiveProductTransfer(transfer.id)
-    setBusy(false)
-    if (!r.ok) setErr(r.reason)
+    handleResult(receiveProductTransfer(transfer.id, { baseUpdatedAt }))
   }
   function doCancel() {
     if (transfer.status === 'in_transit' && !confirm(`已運送中。取消後 ${transfer.fromVenueName} 已扣的庫存不會自動補回，要另開逆向調貨。確定取消？`)) return
     const reason = prompt('取消原因（可留白）') ?? undefined
     setBusy(true); setErr(null)
-    const r = cancelProductTransfer(transfer.id, reason)
-    setBusy(false)
-    if (!r.ok) setErr(r.reason)
+    handleResult(cancelProductTransfer(transfer.id, reason, { baseUpdatedAt }))
   }
 
-  if (transfer.status === 'completed' || transfer.status === 'cancelled') {
-    return <span style={{ fontSize: 11, color: '#aaa' }}>—</span>
-  }
+  const isTerminal = transfer.status === 'completed' || transfer.status === 'cancelled'
 
   return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
+    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 4, alignItems: 'center' }}>
+      {/* 簽收照按鈕（任何狀態都可開，已完成的也能看歷史） */}
+      <button
+        type="button"
+        onClick={onToggleEvidence}
+        style={{
+          padding: '5px 9px', borderRadius: 6, border: '1px solid #e8e6e0',
+          background: evidenceOpen ? '#f5f4f0' : '#fff',
+          cursor: 'pointer', fontSize: 11, fontWeight: 600, color: '#666',
+        }}
+        title="調貨簽收照"
+      >
+        📷
+      </button>
       {transfer.status === 'pending' && (
-        <button
-          onClick={doShip}
-          disabled={busy}
-          style={btnStyle('#2563eb')}
-        >
+        <button onClick={doShip} disabled={busy} style={btnStyle('#2563eb')}>
           📦 出貨
         </button>
       )}
       {transfer.status === 'in_transit' && (
-        <button
-          onClick={doReceive}
-          disabled={busy}
-          style={btnStyle('#10b981')}
-        >
+        <button onClick={doReceive} disabled={busy} style={btnStyle('#10b981')}>
           ✓ 收貨
         </button>
       )}
-      <button
-        onClick={doCancel}
-        disabled={busy}
-        style={{
-          padding: '5px 9px', borderRadius: 6, border: '1px solid #e8e6e0',
-          background: '#fff', cursor: busy ? 'not-allowed' : 'pointer',
-          fontSize: 11, fontWeight: 600, color: '#666',
-        }}
-      >
-        取消
-      </button>
+      {!isTerminal && (
+        <button
+          onClick={doCancel}
+          disabled={busy}
+          style={{
+            padding: '5px 9px', borderRadius: 6, border: '1px solid #e8e6e0',
+            background: '#fff', cursor: busy ? 'not-allowed' : 'pointer',
+            fontSize: 11, fontWeight: 600, color: '#666',
+          }}
+        >
+          取消
+        </button>
+      )}
+      {isTerminal && <span style={{ fontSize: 11, color: '#aaa', marginLeft: 4 }}>—</span>}
       {err && (
         <div style={{
           position: 'absolute', background: '#fee2e2', color: '#991b1b',
           padding: '4px 8px', borderRadius: 6, fontSize: 11, marginTop: 26, right: 16, zIndex: 10,
         }}>
           ⚠️ {err}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+// ── 簽收照展開區 ─────────────────────────────────────────────
+// 階段 9：把 EvidenceUpload 接在每張 transfer card 下面（sourceType='transfer'）
+// - in_transit / completed：顯示已上傳清單（縮圖） + 「再傳一張」
+// - pending / cancelled：唯讀（pending 沒簽收意義、cancelled 是死案）
+
+function TransferEvidenceSection({ transfer }: { transfer: ProductTransferRow }) {
+  const sv = useStoreSync()
+  const me = getCurrentUser()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const evidenceList: UploadedEvidence[] = useMemo(
+    () => listAllEvidence({ sourceType: 'transfer', sourceId: transfer.id }),
+    [transfer.id, sv],
+  )
+  const canUpload = transfer.status === 'in_transit' || transfer.status === 'completed'
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 12, color: '#666', fontWeight: 600 }}>
+        📦 調貨簽收照（{transfer.fromVenueName} → {transfer.toVenueName} · {transfer.productName} × {transfer.quantity}）
+      </div>
+
+      {/* 已上傳清單 */}
+      {evidenceList.length > 0 ? (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          {evidenceList.map(e => (
+            <div key={e.id} style={{
+              border: '1px solid #e8e6e0', borderRadius: 8, padding: 6,
+              background: '#fff', display: 'flex', flexDirection: 'column', gap: 4,
+              maxWidth: 120,
+            }}>
+              <EvidencePreview value={e.id} size={108} showFilename={false} />
+              <div style={{ fontSize: 10, color: '#888', wordBreak: 'break-all' }}>
+                {e.filename}
+              </div>
+              <div style={{ fontSize: 10, color: '#aaa' }}>
+                {(e.size / 1024).toFixed(1)} KB · {e.uploadedByName}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: '#aaa' }}>尚未上傳簽收照</div>
+      )}
+
+      {/* 上傳元件 */}
+      {canUpload ? (
+        <div style={{ marginTop: 4 }}>
+          <EvidenceUpload
+            sourceType="transfer"
+            sourceId={transfer.id}
+            uploadedByName={me?.name ?? '員工'}
+            onUploaded={() => { /* store notify 會觸發 re-render */ }}
+            buttonLabel="上傳簽收照"
+          />
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: '#aaa' }}>
+          {transfer.status === 'pending' ? '出貨前無需簽收照' : '已取消的調貨無法新增簽收照'}
         </div>
       )}
     </div>

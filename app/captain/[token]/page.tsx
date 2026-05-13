@@ -15,7 +15,8 @@ import {
   type RegistrationWithCustomer,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
-import type { SeasonRental } from '@/types'
+import type { SeasonRental, ConflictResult } from '@/types'
+import ConflictBanner from '@/components/ConflictBanner'
 
 // ── 顯示用 helper ──────────────────────────────────────────
 
@@ -464,17 +465,8 @@ function SessionDetailView({
   const effectiveWalkIns = detail.walkIns.length
   const dynamicExpected = (effectiveSubstitutes + effectiveWalkIns) * detail.feePerPaidPerson
 
-  const handleMarkLeave = (reg: RegistrationWithCustomer) => {
-    const isCurrentlyLeft = reg.status === 'cancelled'
-    if (isCurrentlyLeft) {
-      const r = captainUnmarkLeave({ rentalId, registrationId: reg.id })
-      if (!r.ok) { alert(`⚠️ ${r.reason}`); return }
-      // 不再 alert — 視覺上 RosterRow 已立即反應（store 重 render）
-    } else {
-      const r = captainMarkLeave({ rentalId, registrationId: reg.id })
-      if (!r.ok) { alert(`⚠️ ${r.reason}`); return }
-    }
-  }
+  // 階段 10：請假 / 取消請假 handler 移到 SeasonPlayerLeaveRow 內，
+  //          以支援 per-row 樂觀鎖 baseUpdatedAt + ConflictBanner（同 stage 9 transfers pattern）
 
   const handleAddWalkIn = () => {
     const name = window.prompt('臨打／補位姓名')
@@ -543,12 +535,11 @@ function SessionDetailView({
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
           {seasonPlayersWithLeave.map(reg => (
-            <RosterRow
+            <SeasonPlayerLeaveRow
               key={reg.id}
               reg={reg}
+              rentalId={rentalId}
               isPast={detail.isPast}
-              onLeave={() => handleMarkLeave(reg)}
-              onLeaveStatus={reg.status === 'cancelled' ? 'left' : 'attending'}
             />
           ))}
         </div>
@@ -610,6 +601,65 @@ function EmptyHint({ text }: { text: string }) {
 
 
 // ── Roster row（單筆名單） ─────────────────────────────────
+
+// ── 階段 10：季打人員一行（含樂觀鎖 baseUpdatedAt + ConflictBanner）─────
+// 包裝 RosterRow 加上「請假 / 取消請假」mutation 流程。
+// 每筆 reg 各自一份 baseUpdatedAt snapshot — 雙開分頁、員工 + 主揪同時操作時可正確擋衝突。
+// （pattern 同 stage 9 /products/transfers 的 TransferRow）
+
+function SeasonPlayerLeaveRow({
+  reg, rentalId, isPast,
+}: {
+  key?: string | number
+  reg: RegistrationWithCustomer
+  rentalId: string
+  isPast: boolean
+}) {
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string>(reg.updatedAt)
+  const [conflict, setConflict] = useState<ConflictResult | null>(null)
+  useEffect(() => {
+    // store 變動且非衝突狀態 → sync snapshot（讓下次 mutation 用新 base）
+    if (!conflict && reg.updatedAt !== baseUpdatedAt) {
+      setBaseUpdatedAt(reg.updatedAt)
+    }
+  }, [reg.updatedAt, conflict, baseUpdatedAt])
+  const reloadSnapshot = () => {
+    setConflict(null)
+    setBaseUpdatedAt(reg.updatedAt)
+  }
+
+  const handleLeave = () => {
+    const isCurrentlyLeft = reg.status === 'cancelled'
+    const result = isCurrentlyLeft
+      ? captainUnmarkLeave({ rentalId, registrationId: reg.id, baseUpdatedAt })
+      : captainMarkLeave({ rentalId, registrationId: reg.id, baseUpdatedAt })
+
+    if ('conflict' in result && result.conflict) {
+      setConflict(result)
+      return
+    }
+    if (!result.ok) {
+      alert(`⚠️ ${result.reason}`)
+      return
+    }
+    // 成功 — store 自動 re-render，UI 跟著變
+  }
+
+  return (
+    <>
+      <RosterRow
+        reg={reg}
+        isPast={isPast}
+        onLeave={handleLeave}
+        onLeaveStatus={reg.status === 'cancelled' ? 'left' : 'attending'}
+      />
+      {conflict && (
+        <ConflictBanner conflict={conflict} onReload={reloadSnapshot} />
+      )}
+    </>
+  )
+}
+
 
 function RosterRow({
   reg, isPast, onLeave, onLeaveStatus, subType,

@@ -7,8 +7,9 @@ import {
   type SelfCheckinSessionData,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
-import type { PaymentMethod } from '@/types'
+import type { PaymentMethod, ConflictResult } from '@/types'
 import EvidenceUpload from '@/components/EvidenceUpload'
+import ConflictBanner from '@/components/ConflictBanner'
 
 // ── helpers ──────────────────────────────────────────────────
 
@@ -261,6 +262,20 @@ function SelfReportModal({
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  // 階段 9：樂觀鎖 snapshot — 雙開分頁、員工同時補入帳等場景
+  // baseUpdatedAt 開 modal 那一刻就 freeze；conflict 出現就停留直到 reload
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string>(reg.updatedAt)
+  const [conflict, setConflict] = useState<ConflictResult | null>(null)
+  useEffect(() => {
+    if (!conflict && reg.updatedAt !== baseUpdatedAt) {
+      setBaseUpdatedAt(reg.updatedAt)
+    }
+  }, [reg.updatedAt, conflict, baseUpdatedAt])
+  const reloadSnapshot = () => {
+    setConflict(null)
+    setBaseUpdatedAt(reg.updatedAt)
+  }
+
   function submit() {
     setSubmitting(true)
     setErr(null)
@@ -274,9 +289,15 @@ function SelfReportModal({
       registrationId: reg.registrationId,
       method,
       evidence: evidenceValue,
+      baseUpdatedAt, // 階段 9
     })
     setSubmitting(false)
     if (!result.ok) {
+      // 樂觀鎖衝突 → ConflictBanner 接手，不關 modal
+      if ('conflict' in result && result.conflict) {
+        setConflict(result)
+        return
+      }
       setErr(result.reason)
       return
     }
@@ -306,6 +327,12 @@ function SelfReportModal({
         <div style={{ fontSize: 12, color: '#888', marginBottom: 16 }}>
           {reg.customerName} · {reg.customerPhoneMasked} · {money(reg.expectedAmount)}
         </div>
+
+        {conflict && (
+          <div style={{ marginBottom: 14 }}>
+            <ConflictBanner conflict={conflict} onReload={reloadSnapshot} />
+          </div>
+        )}
 
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>付款方式</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>

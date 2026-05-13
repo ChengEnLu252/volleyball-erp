@@ -607,6 +607,17 @@ export interface Registration {
   notes: string | null
   /** 報名時間 */
   registeredAt: Timestamp
+  /**
+   * 最後修改時間（階段 9 新增）。
+   *
+   * 用於樂觀鎖衝突偵測（baseUpdatedAt snapshot）。
+   * - 種子資料：generator 設為 registeredAt
+   * - 主揪請假 / 自助回報已付款 / 取消請假等 mutation：bump 為 new Date()
+   *
+   * 為向後相容：legacy localStorage diff 中的 Registration 沒此欄位 →
+   * hydrate 時 fallback `r.updatedAt ?? r.registeredAt`。
+   */
+  updatedAt: Timestamp
   // ── 自助回報付款（僅無人場次使用）───────────────────
   /**
    * 客戶是否在系統按下「我已付款」按鈕
@@ -624,6 +635,24 @@ export interface Registration {
   selfPaymentEvidence: string | null
   /** 自助回報時間 */
   selfReportedAt: Timestamp | null
+  /**
+   * 退費決策（階段 10 新增）。
+   *
+   * 場次取消（Session.status='cancelled'）後，admin 對該場 paid Registration
+   * 做的「終局決定」：
+   * - `null` ：尚未決定（或本筆 Registration 與退費無關 — 例：unpaid / season_player）
+   * - `'refunded'`：已開過 negative Payment；refund mutation 成功時 set
+   * - `'waived'` ：admin 標記「放棄退費」（客戶同意 / 改下週 / 信用券處理外...）
+   *
+   * 「待退費清單」derived query 條件：
+   *   session.status === 'cancelled' &&
+   *   sum(positive Payment for this reg) > 0 &&
+   *   refundDecision === null
+   *
+   * 為向後相容：legacy localStorage diff 中 Registration 沒此欄位 →
+   * hydrate 時 fallback `r.refundDecision ?? null`。
+   */
+  refundDecision: RefundDecision | null
   // ── 衍生欄位（查詢時 join，不存入資料表）───────────
   /** 顯示用：客戶姓名 */
   customerName?: string
@@ -665,6 +694,22 @@ export const PAYMENT_STATUS_LABEL: Record<PaymentStatus, string> = {
   partial:  '部分付款',
   refunded: '已退款',
   unpaid:   '未付款',
+}
+
+/**
+ * 退費決策（階段 10 新增）— Registration.refundDecision 的 union。
+ *
+ * 只列終局狀態。`null` 代表「未決定」/「不適用」(unpaid / season_player 等)。
+ * - `'refunded'`：已開 negative Payment 退款
+ * - `'waived'` ：admin 與客戶協商「不退」(改下週 / 信用券 / 客戶同意作罷)
+ *
+ * 「進行中」狀態不獨立列 — 由「session 已取消 + 有 paid Payment + decision === null」derive。
+ */
+export type RefundDecision = 'refunded' | 'waived'
+
+export const REFUND_DECISION_LABEL: Record<RefundDecision, string> = {
+  refunded: '已退款',
+  waived:   '放棄退費',
 }
 
 /**
@@ -815,6 +860,17 @@ export interface ProductTransfer {
   status: ProductTransferStatus
   /** 申請時間 */
   requestedAt: Timestamp
+  /**
+   * 最後修改時間（階段 9 新增）。
+   *
+   * 用於樂觀鎖衝突偵測（baseUpdatedAt snapshot）。
+   * - 新建：requestedAt
+   * - shipProductTransfer / receiveProductTransfer / cancelProductTransfer：bump 為 new Date()
+   *
+   * 為向後相容：legacy localStorage diff 中的 ProductTransfer 沒此欄位 →
+   * hydrate 時 fallback `t.updatedAt ?? t.requestedAt`。
+   */
+  updatedAt: Timestamp
   /** 完成時間（status='completed' 時填入；其他 status 為 null） */
   completedAt: Timestamp | null
   /** 備註 */
@@ -837,6 +893,14 @@ export interface BoxAuditRecord {
   productId: UUID
   /** 盤點時間 */
   auditedAt: Timestamp
+  /**
+   * 最後修改時間（階段 9 新增）。
+   *
+   * 用於未來可能的盤點記錄補附憑證 / 修改備註等 mutation 的樂觀鎖。
+   * 目前 mutation 端尚未實作修改既有盤點，但欄位先補上以保型別一致性。
+   * - 新建：auditedAt
+   */
+  updatedAt: Timestamp
   /** 盤點期間起始日 */
   periodStart: string
   /** 盤點期間結束日 */
@@ -927,6 +991,20 @@ export type AuditAction =
    * newValues 記錄試圖寫入的 patch、oldValues 記錄當下 entity 的 updatedAt。
    */
   | 'CONFLICT_DETECTED'
+  // ── ✨ 階段 10 新增：場次取消後的退費決策 ───────
+  /**
+   * 開退費（cancelSession 後 admin 對某 paid Registration 處理）。
+   * 效果：建一筆 Payment(amount<0, status='refunded') + Registration.refundDecision='refunded'。
+   * newValues 包 { amount, method, paymentId, refundDecision:'refunded' }
+   * oldValues 包 { refundDecision:null, updatedAt: ... }
+   */
+  | 'ISSUE_REFUND'
+  /**
+   * 放棄退費（admin 標記不退錢）— 不開 Payment，純標旗。
+   * newValues 包 { reason, refundDecision:'waived' }
+   * oldValues 包 { refundDecision:null, updatedAt: ... }
+   */
+  | 'WAIVE_REFUND'
 
 /**
  * 操作者類型（階段 3 production 升級新增）
@@ -1143,13 +1221,22 @@ export interface RentalSlot {
 /**
  * 憑證可附在哪些業務實體上。
  *
- * 目前只開 'self_payment'（自助回報轉帳截圖）；
- * 未來可擴：'box_audit' (誠實商店盤點照片) / 'transfer' (調貨簽收單) 等。
+ * 階段 8 開：'self_payment'（自助回報轉帳截圖）
+ * 階段 9 擴：
+ *   - 'box_audit'：誠實商店投錢箱盤點現場照（投錢箱外觀 / 實際庫存照）
+ *   - 'transfer'：跨館調貨簽收單 / 出貨包裝照
+ *
+ * 新增 sourceType 時要同步維護的地方：
+ *   1. 此 union + EVIDENCE_SOURCE_LABEL
+ *   2. data/api.ts 的 uploadEvidence：補對應 sourceId → venue lookup 規則
+ *   3. （可選）對應業務頁面接上 <EvidenceUpload> 元件
  */
-export type EvidenceSourceType = 'self_payment'
+export type EvidenceSourceType = 'self_payment' | 'box_audit' | 'transfer'
 
 export const EVIDENCE_SOURCE_LABEL: Record<EvidenceSourceType, string> = {
   self_payment: '自助回報轉帳',
+  box_audit:    '盤點現場',
+  transfer:     '調貨簽收',
 }
 
 /**

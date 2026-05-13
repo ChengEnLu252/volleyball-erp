@@ -7,13 +7,18 @@ import {
   listBoxAudits,
   previewBoxAudit,
   recordBoxAudit,
+  listAllEvidence,
+  getCurrentUser,
   type HonestShopVenueProductSummary,
-  type BoxAuditRecord,
 } from '@/data/api'
 import { useStoreSync, hydrateStore } from '@/data/store'
 import {
   ReconHeader, StatCard, Panel, Badge, Money, VENUE_COLOR,
 } from '@/components/reconciliation/Common'
+// 階段 9：型別直接從 '@/types' import
+import type { BoxAuditRecord, UploadedEvidence } from '@/types'
+import EvidenceUpload from '@/components/EvidenceUpload'
+import EvidencePreview from '@/components/EvidencePreview'
 
 function fmt(dateStr: string): string {
   const [, m, d] = dateStr.split('-').map(Number)
@@ -223,7 +228,12 @@ function AuditModal({
   const [notes, setNotes] = useState<string>('')
   const [submitting, setSubmitting] = useState(false)
   const [err, setErr] = useState<string | null>(null)
-  const [done, setDone] = useState<{ cashDiff: number; stockDiff: number } | null>(null)
+  // 階段 9：done 也帶 auditId（成功後讓使用者可立刻補上現場照）
+  const [done, setDone] = useState<
+    | { cashDiff: number; stockDiff: number; auditId: string }
+    | null
+  >(null)
+  const me = getCurrentUser()
 
   const cashNum  = Number(countedCash)
   const stockNum = Number(countedStock)
@@ -249,7 +259,11 @@ function AuditModal({
       setErr(result.reason)
       return
     }
-    setDone({ cashDiff: result.cashDiscrepancy, stockDiff: result.stockDiscrepancy })
+    setDone({
+      cashDiff: result.cashDiscrepancy,
+      stockDiff: result.stockDiscrepancy,
+      auditId: result.auditId,
+    })
   }
 
   if (done) {
@@ -290,6 +304,27 @@ function AuditModal({
             {done.stockDiff !== 0 && <>✓ 已自動產生 adjustment 商品異動校正庫存<br /></>}
             ✓ 已寫入 audit log
           </div>
+
+          {/* 階段 9：盤點完成後可選擇補上現場照（投錢箱外觀 / 庫存照） */}
+          <div style={{
+            marginTop: 14, padding: '12px 14px',
+            background: '#fafaf7', border: '1px solid #e8e6e0', borderRadius: 8,
+          }}>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 8 }}>
+              📷 補上現場照（可選）
+            </div>
+            <div style={{ fontSize: 11, color: '#888', marginBottom: 8, lineHeight: 1.6 }}>
+              建議拍：投錢箱外觀 / 實際庫存照 / 異常現場。圖片存進瀏覽器 IndexedDB。
+            </div>
+            <EvidenceUpload
+              sourceType="box_audit"
+              sourceId={done.auditId}
+              uploadedByName={me?.name ?? '員工'}
+              onUploaded={() => { /* store notify 觸發歷史列表重新 fetch */ }}
+              buttonLabel="選擇現場照"
+            />
+          </div>
+
           <button
             onClick={onClose}
             style={{
@@ -469,6 +504,13 @@ function HistoryModal({
 
 function AuditHistoryRow({ audit }: { audit: BoxAuditRecord }) {
   const date = new Date(audit.auditedAt)
+  // 階段 9：撈該 audit 的現場照（sourceType='box_audit', sourceId=audit.id）
+  const sv = useStoreSync()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const evidenceList: UploadedEvidence[] = useMemo(
+    () => listAllEvidence({ sourceType: 'box_audit', sourceId: audit.id }),
+    [audit.id, sv],
+  )
   return (
     <div style={{
       padding: 12, background: '#fafaf7', borderRadius: 8,
@@ -489,6 +531,13 @@ function AuditHistoryRow({ audit }: { audit: BoxAuditRecord }) {
         帳面 ${audit.expectedRevenue} · 實收 ${audit.countedCash} · 實庫 {audit.countedStock} 罐
         {audit.notes && <><br />💬 {audit.notes}</>}
       </div>
+      {evidenceList.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+          {evidenceList.map(e => (
+            <EvidencePreview key={e.id} value={e.id} size={64} showFilename={false} />
+          ))}
+        </div>
+      )}
     </div>
   )
 }

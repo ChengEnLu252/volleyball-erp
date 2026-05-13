@@ -131,15 +131,16 @@ function randomToken(): string {
 }
 
 
-// ── 4. Venues（保留原始 v1-v6 ID，shape 不變） ──────────────────
+// ── 4. Venues（v1-v7，7 個館；phone 空字串 — demo 不顯示電話） ────
 
 const VENUES: Venue[] = [
-  { id: 'v1', name: '球魔方',  address: '台北市大安區復興南路一段', phone: '02-2701-xxxx', isActive: true, createdAt: '2022-01-01T00:00:00Z' },
-  { id: 'v2', name: 'Ace',     address: '台北市信義區松仁路',       phone: '02-2345-xxxx', isActive: true, createdAt: '2022-03-01T00:00:00Z' },
-  { id: 'v3', name: '飛翼',    address: '新北市板橋區文化路',       phone: '02-2956-xxxx', isActive: true, createdAt: '2022-06-01T00:00:00Z' },
-  { id: 'v4', name: '日日',    address: '台北市中山區中山北路',     phone: '02-2521-xxxx', isActive: true, createdAt: '2023-01-01T00:00:00Z' },
-  { id: 'v5', name: 'Playone', address: '台北市松山區八德路',       phone: '02-2748-xxxx', isActive: true, createdAt: '2023-06-01T00:00:00Z' },
-  { id: 'v6', name: '就醬瘋',  address: '新北市新莊區新莊路',       phone: '02-2201-xxxx', isActive: true, createdAt: '2024-06-01T00:00:00Z' },
+  { id: 'v1', name: '球魔方 2.0', address: '新北市五股區更寮里中興路二段37巷13號', phone: '', isActive: true, createdAt: '2022-01-01T00:00:00Z' },
+  { id: 'v2', name: 'Ace 2.0',    address: '新北市林口區中北二街2-1號',             phone: '', isActive: true, createdAt: '2022-03-01T00:00:00Z' },
+  { id: 'v3', name: '飛翼',       address: '新北市新莊區新北大道四段182-2號',       phone: '', isActive: true, createdAt: '2022-06-01T00:00:00Z' },
+  { id: 'v4', name: 'Hibi 日日',  address: '桃園市中壢區忠孝路420號',               phone: '', isActive: true, createdAt: '2023-01-01T00:00:00Z' },
+  { id: 'v5', name: 'play one',   address: '桃園市八德區巧克力街16-1號',             phone: '', isActive: true, createdAt: '2023-06-01T00:00:00Z' },
+  { id: 'v6', name: '就醬瘋',     address: '新竹市東區科園里園區二路221-2號',       phone: '', isActive: true, createdAt: '2024-06-01T00:00:00Z' },
+  { id: 'v7', name: 'Ace 3.0',    address: '新北市中和區莒光路211-33號',             phone: '', isActive: true, createdAt: '2025-03-01T00:00:00Z' },
 ]
 
 const VENUE_NAME_BY_ID: Record<string, string> =
@@ -149,7 +150,7 @@ const VENUE_NAME_BY_ID: Record<string, string> =
 // ── 5. Users（保留原始 u1-u4 ID） ────────────────────────────
 
 const USERS: User[] = [
-  { id: 'u1', name: '陳老闆',    email: 'boss@volleyball.tw', phone: '0912-xxx-001', globalRole: 'owner', isActive: true, createdAt: '2022-01-01T00:00:00Z' },
+  { id: 'u1', name: '王家凱',     email: 'boss@volleyball.tw', phone: '0912-xxx-001', globalRole: 'owner', isActive: true, createdAt: '2022-01-01T00:00:00Z' },
   { id: 'u2', name: '王館主',    email: 'wang@volleyball.tw', phone: '0912-xxx-002', globalRole: 'staff', isActive: true, createdAt: '2022-01-15T00:00:00Z' },
   { id: 'u3', name: '李小芳',    email: 'fang@volleyball.tw', phone: '0912-xxx-003', globalRole: 'staff', isActive: true, createdAt: '2022-02-01T00:00:00Z' },
   { id: 'u4', name: '工讀生小明', email: 'ming@volleyball.tw', phone: '0912-xxx-004', globalRole: 'staff', isActive: true, createdAt: '2024-01-01T00:00:00Z' },
@@ -225,11 +226,11 @@ const SEASONS: Season[] = [
 ]
 
 
-// ── 8. Timeslots（每館定義時段） ─────────────────────────────
+// ── 8. Timeslots（7 館 × 7 天 × 4 時段 = 196 個 timeslot） ─────
 
 /**
  * 內部 helper 型別 — 用來描述「每館要建立哪些時段」。
- * 比 hardcode 24 個 Timeslot object 簡潔很多。
+ * 階段 11：每館每天 4 個固定時段（9-12 / 12:20-15:20 / 15:40-18:40 / 19-22）
  */
 type TimeslotSpec = {
   venueId: string
@@ -246,43 +247,77 @@ type TimeslotSpec = {
   label: string | null
 }
 
-const TIMESLOT_SPECS: TimeslotSpec[] = [
-  // 飛翼 (v3) — 大型旗艦館，6 時段
-  { venueId: 'v3', dayOfWeek: 4, startTime: '19:00', endTime: '22:00', court: 'A 場', isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週四黃金場' },
-  { venueId: 'v3', dayOfWeek: 6, startTime: '09:00', endTime: '12:00', court: 'A 場', isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週六晨光場' },
-  { venueId: 'v3', dayOfWeek: 0, startTime: '14:00', endTime: '17:00', court: 'B 場', isHotZone: true,  defaultCourtFee: 300, defaultSessionType: 'male_position', defaultNetHeight: 'male',   defaultMinSkillRequired: 'A',  defaultMaxSkillAllowed: null, label: '週日進階場' },
-  { venueId: 'v3', dayOfWeek: 5, startTime: '19:00', endTime: '22:00', court: 'A 場', isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_only',     defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週五純男場' },
-  { venueId: 'v3', dayOfWeek: 2, startTime: '10:00', endTime: '13:00', court: 'B 場', isHotZone: false, defaultCourtFee: 220, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週二早場' },
-  { venueId: 'v3', dayOfWeek: 3, startTime: '14:00', endTime: '17:00', court: 'B 場', isHotZone: false, defaultCourtFee: 220, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: 'B',  label: '週三女網場' },
+/** 固定 4 段（每館每天） */
+const DAILY_SLOTS = [
+  { start: '09:00', end: '12:00', name: '上午' },
+  { start: '12:20', end: '15:20', name: '午場' },
+  { start: '15:40', end: '18:40', name: '下午' },
+  { start: '19:00', end: '22:00', name: '晚場' },
+] as const
 
-  // Ace (v2) — 健康基準館，4 時段
-  { venueId: 'v2', dayOfWeek: 5, startTime: '19:00', endTime: '22:00', court: null,   isHotZone: true,  defaultCourtFee: 300, defaultSessionType: 'male_only',     defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: 'A',  label: '週五黃金場' },
-  { venueId: 'v2', dayOfWeek: 6, startTime: '14:00', endTime: '17:00', court: null,   isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週六午場' },
-  { venueId: 'v2', dayOfWeek: 3, startTime: '19:00', endTime: '22:00', court: null,   isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週三晚場' },
-  { venueId: 'v2', dayOfWeek: 1, startTime: '10:00', endTime: '13:00', court: null,   isHotZone: false, defaultCourtFee: 200, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週一早場' },
+const DOW_LABEL = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'] as const
 
-  // 球魔方 (v1) — 冷門場次少開故事館
-  { venueId: 'v1', dayOfWeek: 6, startTime: '19:00', endTime: '22:00', court: 'A 場', isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_only',     defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週六晚黃金' },
-  { venueId: 'v1', dayOfWeek: 0, startTime: '09:00', endTime: '12:00', court: 'A 場', isHotZone: true,  defaultCourtFee: 250, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週日晨場' },
-  { venueId: 'v1', dayOfWeek: 4, startTime: '14:00', endTime: '17:00', court: 'A 場', isHotZone: false, defaultCourtFee: 200, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: 'B+', label: '週四冷門場' },
-  { venueId: 'v1', dayOfWeek: 2, startTime: '14:00', endTime: '17:00', court: 'A 場', isHotZone: false, defaultCourtFee: 200, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週二午場' },
+/** 場次熱冷分布 — return { isHot, fee } 給每個 (dow, slotIdx) */
+function slotHotness(dow: number, slotIdx: number): { isHot: boolean; fee: number } {
+  const isWeekend = dow === 0 || dow === 6
+  // 4 段：0=上午、1=午場、2=下午、3=晚場
+  if (isWeekend && slotIdx === 3) return { isHot: true,  fee: 300 } // 週末晚黃金
+  if (isWeekend && slotIdx === 2) return { isHot: true,  fee: 280 } // 週末下午
+  if (dow === 5 && slotIdx === 3) return { isHot: true,  fee: 280 } // 週五晚
+  if (isWeekend && slotIdx === 0) return { isHot: true,  fee: 250 } // 週末晨
+  if (slotIdx === 3)              return { isHot: false, fee: 250 } // 平日晚（中）
+  if (slotIdx === 2)              return { isHot: false, fee: 220 } // 平日下午（中冷）
+  if (slotIdx === 0)              return { isHot: false, fee: 200 } // 平日上午（冷）
+  return                                 { isHot: false, fee: 180 } // 平日午場（最冷）
+}
 
-  // 日日 (v4) — 含一個無人場次、低庫存故事館
-  { venueId: 'v4', dayOfWeek: 0, startTime: '19:00', endTime: '22:00', court: null,   isHotZone: true,  defaultCourtFee: 250, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週日晚黃金' },
-  { venueId: 'v4', dayOfWeek: 4, startTime: '19:00', endTime: '22:00', court: null,   isHotZone: true,  defaultCourtFee: 250, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週四晚場' },
-  { venueId: 'v4', dayOfWeek: 1, startTime: '14:00', endTime: '17:00', court: null,   isHotZone: false, defaultCourtFee: 180, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週一無人場' },
+/** 場次型態分布 */
+function slotKind(
+  dow: number,
+  slotIdx: number,
+): { sessionType: SessionType; netHeight: NetHeight; min: SkillLevel | null; max: SkillLevel | null } {
+  const isWeekend = dow === 0 || dow === 6
+  // 熱門時段：偏向男網、進階
+  if (isWeekend && slotIdx === 3) return { sessionType: 'male_position', netHeight: 'male',   min: 'A',  max: null }
+  if (isWeekend && slotIdx === 2) return { sessionType: 'male_mixed',    netHeight: 'male',   min: 'B',  max: null }
+  if (dow === 5 && slotIdx === 3) return { sessionType: 'male_only',     netHeight: 'male',   min: 'B',  max: 'A'  }
+  if (slotIdx === 3)              return { sessionType: 'male_mixed',    netHeight: 'male',   min: 'B',  max: null }
+  if (isWeekend && slotIdx === 0) return { sessionType: 'male_mixed',    netHeight: 'male',   min: null, max: null }
+  // 冷門時段：女網、無門檻
+  if (slotIdx === 0)              return { sessionType: 'female_mixed',  netHeight: 'female', min: null, max: null }
+  if (slotIdx === 2)              return { sessionType: 'female_mixed',  netHeight: 'female', min: null, max: 'B+' }
+  return                                 { sessionType: 'female_mixed',  netHeight: 'female', min: null, max: 'B'  }
+}
 
-  // Playone (v5) — 主揪欠款故事館
-  { venueId: 'v5', dayOfWeek: 0, startTime: '14:00', endTime: '17:00', court: null,   isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_position', defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週日午場（主揪場）' },
-  { venueId: 'v5', dayOfWeek: 6, startTime: '19:00', endTime: '22:00', court: null,   isHotZone: true,  defaultCourtFee: 280, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: 'B',  defaultMaxSkillAllowed: null, label: '週六晚場' },
-  { venueId: 'v5', dayOfWeek: 5, startTime: '14:00', endTime: '17:00', court: null,   isHotZone: false, defaultCourtFee: 200, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週五午場' },
-  { venueId: 'v5', dayOfWeek: 2, startTime: '09:00', endTime: '12:00', court: null,   isHotZone: false, defaultCourtFee: 180, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週二早場' },
+/** 哪些館有 A/B 兩個場（旗艦館） */
+const MULTI_COURT_VENUES = new Set(['v1', 'v3']) // 球魔方 2.0、飛翼
 
-  // 就醬瘋 (v6) — 最小最新館
-  { venueId: 'v6', dayOfWeek: 6, startTime: '09:00', endTime: '12:00', court: null,   isHotZone: true,  defaultCourtFee: 250, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週六晨場' },
-  { venueId: 'v6', dayOfWeek: 0, startTime: '19:00', endTime: '22:00', court: null,   isHotZone: true,  defaultCourtFee: 250, defaultSessionType: 'male_mixed',    defaultNetHeight: 'male',   defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週日晚場' },
-  { venueId: 'v6', dayOfWeek: 3, startTime: '14:00', endTime: '17:00', court: null,   isHotZone: false, defaultCourtFee: 180, defaultSessionType: 'female_mixed',  defaultNetHeight: 'female', defaultMinSkillRequired: null, defaultMaxSkillAllowed: null, label: '週三午場' },
-]
+const TIMESLOT_SPECS: TimeslotSpec[] = []
+for (const venue of VENUES) {
+  for (let dow = 0; dow < 7; dow++) {
+    for (let slotIdx = 0; slotIdx < 4; slotIdx++) {
+      const slot = DAILY_SLOTS[slotIdx]
+      const { isHot, fee } = slotHotness(dow, slotIdx)
+      const { sessionType, netHeight, min, max } = slotKind(dow, slotIdx)
+      // 旗艦館：熱門場切 A 場、其他切 B 場；單場館 court=null
+      const court = MULTI_COURT_VENUES.has(venue.id) ? (isHot ? 'A 場' : 'B 場') : null
+      TIMESLOT_SPECS.push({
+        venueId: venue.id,
+        dayOfWeek: dow as 0 | 1 | 2 | 3 | 4 | 5 | 6,
+        startTime: slot.start,
+        endTime: slot.end,
+        court,
+        isHotZone: isHot,
+        defaultCourtFee: fee,
+        defaultSessionType: sessionType,
+        defaultNetHeight: netHeight,
+        defaultMinSkillRequired: min,
+        defaultMaxSkillAllowed: max,
+        label: `${DOW_LABEL[dow]}${slot.name}`,
+      })
+    }
+  }
+}
 
 const TIMESLOTS: Timeslot[] = TIMESLOT_SPECS.map((spec, idx) => ({
   id: `ts${idx + 1}`,
@@ -307,20 +342,32 @@ const TIMESLOTS: Timeslot[] = TIMESLOT_SPECS.map((spec, idx) => ({
 const TIMESLOT_BY_ID: Record<string, Timeslot> =
   Object.fromEntries(TIMESLOTS.map(t => [t.id, t]))
 
+/** 依 (venueId, dow, slotIdx) 反查 timeslot ID — RENTAL_SPECS 等用 */
+function findTimeslotId(venueId: string, dow: number, slotIdx: number): string {
+  const startTime = DAILY_SLOTS[slotIdx].start
+  const found = TIMESLOTS.find(t => t.venueId === venueId && t.dayOfWeek === dow && t.startTime === startTime)
+  if (!found) throw new Error(`Timeslot not found: ${venueId} dow=${dow} slot=${slotIdx}`)
+  return found.id
+}
+
 
 // ── 9. SeasonRentals（5 張，1 張欠款） ───────────────────────
 
-/** 內部 helper：哪些時段有主揪 */
-const RENTAL_SPECS: { timeslotId: string; captainId: string; status: SeasonRentalStatus; paidRatio: number }[] = [
-  { timeslotId: 'ts1',  captainId: 'c8',  status: 'active', paidRatio: 1.0 },  // 飛翼週四晚 — 主揪楊明哲（前國手）
-  { timeslotId: 'ts2',  captainId: 'c3',  status: 'active', paidRatio: 1.0 },  // 飛翼週六晨 — 主揪王大偉
-  { timeslotId: 'ts7',  captainId: 'c6',  status: 'active', paidRatio: 1.0 },  // Ace 週五晚 — 主揪吳建宏（S 程度）
-  { timeslotId: 'ts11', captainId: 'c10', status: 'active', paidRatio: 1.0 },  // 球魔方週六晚 — 主揪鄭志明
-  { timeslotId: 'ts18', captainId: 'c1',  status: 'pending', paidRatio: 0.5 }, // Playone 週日午 — 主揪林小明（欠款）
+/**
+ * 內部 helper：哪些時段有主揪
+ * 用 (venueId, dow, slotIdx) 三元組描述，避免綁死流水 ts id
+ */
+const RENTAL_SPECS: { venueId: string; dow: number; slotIdx: number; captainId: string; status: SeasonRentalStatus; paidRatio: number; note: string }[] = [
+  { venueId: 'v3', dow: 4, slotIdx: 3, captainId: 'c8',  status: 'active',  paidRatio: 1.0, note: '飛翼週四晚 — 主揪楊明哲（前國手）' },
+  { venueId: 'v3', dow: 6, slotIdx: 0, captainId: 'c3',  status: 'active',  paidRatio: 1.0, note: '飛翼週六上午 — 主揪王大偉' },
+  { venueId: 'v2', dow: 5, slotIdx: 3, captainId: 'c6',  status: 'active',  paidRatio: 1.0, note: 'Ace 2.0 週五晚 — 主揪吳建宏（S 程度）' },
+  { venueId: 'v1', dow: 6, slotIdx: 3, captainId: 'c10', status: 'active',  paidRatio: 1.0, note: '球魔方 2.0 週六晚 — 主揪鄭志明' },
+  { venueId: 'v5', dow: 0, slotIdx: 2, captainId: 'c1',  status: 'pending', paidRatio: 0.5, note: 'play one 週日下午 — 主揪林小明（欠款 50%）' },
 ]
 
 const SEASON_RENTALS: SeasonRental[] = RENTAL_SPECS.map((spec, idx) => {
-  const timeslot = TIMESLOT_BY_ID[spec.timeslotId]
+  const timeslotId = findTimeslotId(spec.venueId, spec.dow, spec.slotIdx)
+  const timeslot = TIMESLOT_BY_ID[timeslotId]
   const captain  = CUSTOMER_BY_ID[spec.captainId]
   const venueName = VENUE_NAME_BY_ID[timeslot.venueId]
   const pricePerSession = timeslot.defaultCourtFee * 18
@@ -328,7 +375,7 @@ const SEASON_RENTALS: SeasonRental[] = RENTAL_SPECS.map((spec, idx) => {
   const paidAmount = Math.round(totalAmount * spec.paidRatio)
   return {
     id: `sr${idx + 1}`,
-    timeslotId: spec.timeslotId,
+    timeslotId,
     seasonId: 'sn-current',
     captainId: spec.captainId,
     pricePerSession,
@@ -371,12 +418,19 @@ for (let dayOffset = -56; dayOffset <= 28; dayOffset++) {
   for (const ts of TIMESLOTS) {
     if (ts.dayOfWeek !== dow) continue
 
+    // 階段 11：196 個 timeslot，活化率按熱冷分層，控制總場次到 ~1700
+    //  - 熱門時段：90% 活化（10% skip）
+    //  - 冷門時段：60% 活化（40% skip）
+    //  - v7 Ace 3.0（新開幕）：再 ×0.7 折扣（資料量少 30%）
     // 球魔方 v1 故事：最近 7 天的「冷門時段」改成 cancelled，營收驟降
     const isMagicblockColdRecent = ts.venueId === 'v1' && !ts.isHotZone && dayOffset >= -7 && dayOffset <= 0
     if (isMagicblockColdRecent && chance(0.85)) continue  // 85% 機率乾脆不開
 
-    // 一般情況下每週 ~92% 會開（偶爾停場）
-    if (!isMagicblockColdRecent && chance(0.08)) continue
+    if (!isMagicblockColdRecent) {
+      const baseSkip = ts.isHotZone ? 0.10 : 0.40
+      const v7Discount = ts.venueId === 'v7' ? 0.30 : 0
+      if (chance(baseSkip + v7Discount)) continue
+    }
 
     const isPastOrToday = dayOffset <= 0
     const status: SessionStatus =
@@ -398,8 +452,8 @@ for (let dayOffset = -56; dayOffset <= 28; dayOffset++) {
     const acFee = hasAcFee ? randInt(20, 30) : 0
     const acEnabled = hasAcFee && chance(0.6)
 
-    // 日日 v4 週一：固定為無人場次
-    const isUnattended = ts.venueId === 'v4' && ts.dayOfWeek === 1
+    // 日日 v4 週一午場：固定為無人場次（故事點 5）
+    const isUnattended = ts.venueId === 'v4' && ts.dayOfWeek === 1 && ts.startTime === '12:20'
 
     SESSIONS.push({
       id: `s-${ts.id}-${dateStr}`,
@@ -530,6 +584,7 @@ for (const session of SESSIONS) {
       }
     }
 
+    const registeredAt = isoAt(dateAddDays(session.sessionDate, -randInt(1, 7)), randInt(8, 22))
     REGISTRATIONS.push({
       id: regId,
       sessionId: session.id,
@@ -539,11 +594,19 @@ for (const session of SESSIONS) {
       registeredBySource: source,
       status: regStatus,
       notes: null,
-      registeredAt: isoAt(dateAddDays(session.sessionDate, -randInt(1, 7)), randInt(8, 22)),
+      registeredAt,
+      // 階段 9：updatedAt = 最後一次對此 Registration 的「狀態變動」時間
+      //         有自助回報 → 用 selfReportedAt（最近的真正 mutation）
+      //         否則就是 registeredAt（建立即未再變動）
+      updatedAt: selfReportedAt ?? registeredAt,
       selfReportedPaid,
       selfPaymentMethod,
       selfPaymentEvidence,
       selfReportedAt,
+      // 階段 10：refundDecision 預設 null（未決定 / 不適用）。
+      //          場次未取消、客戶未付款 → 永遠不會走到「待退費」流程。
+      //          只有 cancelSession 後且有 paid Payment 才會被 admin 觸發 issueRefund/waiveRefund。
+      refundDecision: null,
       customerName: CUSTOMER_BY_ID[r.customerId]?.name,
       customerPhone: CUSTOMER_BY_ID[r.customerId]?.phone ?? undefined,
       customerSkillLevel: CUSTOMER_BY_ID[r.customerId]?.skillLevel ?? undefined,
@@ -648,7 +711,7 @@ type VenueProductShape = {
 
 const VENUE_PRODUCTS: VenueProductShape[] = [
   {
-    venueId: 'v1', venueName: '球魔方',
+    venueId: 'v1', venueName: '球魔方 2.0',
     products: [
       { id: 'v1p1', name: '運動飲料', unitPrice: 35,  currentStock: 18, lowStockThreshold: 5,  isShared: true },
       { id: 'v1p2', name: '護膝',     unitPrice: 280, currentStock: 8,  lowStockThreshold: 3,  isShared: true },
@@ -657,7 +720,7 @@ const VENUE_PRODUCTS: VenueProductShape[] = [
     ],
   },
   {
-    venueId: 'v2', venueName: 'Ace',
+    venueId: 'v2', venueName: 'Ace 2.0',
     products: [
       { id: 'v2p1', name: '運動飲料', unitPrice: 35,  currentStock: 12, lowStockThreshold: 5, isShared: true },
       { id: 'v2p2', name: '護膝',     unitPrice: 280, currentStock: 4,  lowStockThreshold: 3, isShared: true },
@@ -675,8 +738,8 @@ const VENUE_PRODUCTS: VenueProductShape[] = [
     ],
   },
   {
-    // 日日：故事 — 運動飲料 stock=2 觸發低庫存警告
-    venueId: 'v4', venueName: '日日',
+    // Hibi 日日：故事 — 運動飲料 stock=2 觸發低庫存警告
+    venueId: 'v4', venueName: 'Hibi 日日',
     products: [
       { id: 'v4p1', name: '運動飲料', unitPrice: 35,  currentStock: 2,  lowStockThreshold: 5,  isShared: true },
       { id: 'v4p2', name: '護膝',     unitPrice: 280, currentStock: 6,  lowStockThreshold: 3,  isShared: true },
@@ -684,13 +747,29 @@ const VENUE_PRODUCTS: VenueProductShape[] = [
     ],
   },
   {
-    venueId: 'v5', venueName: 'Playone',
+    venueId: 'v5', venueName: 'play one',
     products: [
       { id: 'v5p1', name: '運動飲料', unitPrice: 35,  currentStock: 20, lowStockThreshold: 5, isShared: true },
       { id: 'v5p2', name: '護膝',     unitPrice: 280, currentStock: 2,  lowStockThreshold: 3, isShared: true },
       { id: 'v5p3', name: '排球',     unitPrice: 850, currentStock: 3,  lowStockThreshold: 2, isShared: false },
       { id: 'v5p4', name: '護踝',     unitPrice: 180, currentStock: 8,  lowStockThreshold: 3, isShared: false },
       { id: 'v5p5', name: '運動毛巾', unitPrice: 120, currentStock: 0,  lowStockThreshold: 5, isShared: false },
+    ],
+  },
+  {
+    venueId: 'v6', venueName: '就醬瘋',
+    products: [
+      { id: 'v6p1', name: '運動飲料', unitPrice: 35,  currentStock: 16, lowStockThreshold: 5, isShared: true },
+      { id: 'v6p2', name: '護膝',     unitPrice: 280, currentStock: 5,  lowStockThreshold: 3, isShared: true },
+      { id: 'v6p3', name: '運動毛巾', unitPrice: 120, currentStock: 12, lowStockThreshold: 5, isShared: false },
+    ],
+  },
+  {
+    venueId: 'v7', venueName: 'Ace 3.0',
+    products: [
+      { id: 'v7p1', name: '運動飲料', unitPrice: 35,  currentStock: 25, lowStockThreshold: 5, isShared: true },
+      { id: 'v7p2', name: '護膝',     unitPrice: 280, currentStock: 8,  lowStockThreshold: 3, isShared: true },
+      { id: 'v7p3', name: '排球',     unitPrice: 850, currentStock: 4,  lowStockThreshold: 2, isShared: false },
     ],
   },
 ]

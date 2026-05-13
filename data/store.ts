@@ -27,6 +27,7 @@
 //
 // 不存的資料（read-only）：venues / seasons / timeslots / sessions /
 //   payments / products / venueProducts / users。階段 1-5 都不 mutate 這些。
+//   階段 10 改：payments 變 mutable（退費鏈會 push negative Payment）。
 // ============================================================
 
 import { useSyncExternalStore } from 'react'
@@ -39,12 +40,15 @@ import type {
   ProductTransfer, ProductTransferStatus, BoxAuditRecord,
   // 階段 8：上傳憑證 meta
   UploadedEvidence,
+  // 階段 10：Payment 首次變 mutable（退費鏈），RefundDecision 為終局決策
+  Payment, RefundDecision,
 } from '@/types'
 
-// 階段 6：本檔 re-export 這幾個型別，讓 data/api.ts 的既有 import 路徑可以不動。
-//         （未來 api.ts 也可以直接從 '@/types' import，效果等價。）
-export type { ProductTransfer, ProductTransferStatus, BoxAuditRecord } from '@/types'
-export { PRODUCT_TRANSFER_STATUS_LABEL } from '@/types'
+// 階段 9：移除階段 6 留下的 type re-export。
+// 當時為了讓 data/api.ts 可以從 './store' 拿型別，sibling 在這 re-export。
+// 經 grep 確認 app/ components/ 無人從 '@/data/store' import 這幾個型別 —
+// 全都 inline 從 '@/data/api' import；api.ts 階段 9 已改為直接從 '@/types' import。
+// 此 re-export 自此無人引用，移除以避免「同一個型別有兩個 import 路徑」的混亂。
 
 
 // ============================================================
@@ -60,6 +64,7 @@ const MUTABLE = GENERATED as unknown as {
   customers: Customer[]
   seasonRentals: SeasonRental[]
   productTransactions: ProductTransaction[]  // 階段 5 加：誠實商店盤點 adjustment / 調貨 adjustment
+  payments: Payment[]                         // 階段 10 加：退費鏈會 push negative Payment
 }
 
 
@@ -95,8 +100,16 @@ interface PersistedDiff {
   customersAdded: Customer[]
   /** 新增的報名（加臨打時建立的，type='walk_in'）*/
   registrationsAdded: Registration[]
-  /** 對既有報名的狀態 patch（請假時 'registered' → 'cancelled'）*/
-  registrationsPatches: Record<string, { status?: RegistrationStatus }>
+  /**
+   * 對既有報名的狀態 patch（請假時 'registered' → 'cancelled'）。
+   * 階段 9 加 `updatedAt?`：mutation 端 bump 時序，用於樂觀鎖。
+   * 階段 10 加 `refundDecision?`：issueRefund / waiveRefund mutation 寫此通道。
+   */
+  registrationsPatches: Record<string, {
+    status?: RegistrationStatus
+    updatedAt?: string
+    refundDecision?: RefundDecision | null
+  }>
   /** 新增的季租單（館長端「新增」流程建立的，status='pending'）*/
   seasonRentalsAdded: SeasonRental[]
   /** 對既有季租單的欄位 patch（重發 token / 停用）*/
@@ -108,23 +121,35 @@ interface PersistedDiff {
   }>
   /** 累積的 audit logs */
   auditLogs: AuditLog[]
-  /** 目前登入的 User.id（u1-u4），預設 u1 陳老闆 */
+  /** 目前登入的 User.id（u1-u4），預設 u1 王家凱 */
   currentUserId: string
 
   // ── 階段 5（原 store-stage5）────────────────────────
-  /** Registration 自助回報 4 欄位 patch（無人場次） */
+  /**
+   * Registration 自助回報 4 欄位 patch（無人場次）。
+   * 階段 9 加 `updatedAt?`：自助回報也算「對 Registration 的修改」，
+   * mutation 端會 bump 時序以支援樂觀鎖。
+   */
   registrationSelfReportPatches: Record<string, {
     selfReportedPaid?: boolean
     selfPaymentMethod?: PaymentMethod | null
     selfPaymentEvidence?: string | null
     selfReportedAt?: string | null
+    updatedAt?: string
   }>
   /** 新增的商品異動（誠實商店盤點 adjustment / 調貨 adjustment） */
   productTransactionsAdded: ProductTransaction[]
   /** 新增的跨館調貨單 */
   transfersAdded: ProductTransfer[]
-  /** 對既有調貨單的狀態 patch */
-  transfersPatches: Record<string, { status?: ProductTransferStatus; completedAt?: string | null }>
+  /**
+   * 對既有調貨單的狀態 patch。
+   * 階段 9 加 `updatedAt?`：出貨 / 收貨 / 取消 都會 bump 時序。
+   */
+  transfersPatches: Record<string, {
+    status?: ProductTransferStatus
+    completedAt?: string | null
+    updatedAt?: string
+  }>
   /** 新增的投錢箱盤點記錄 */
   boxAuditsAdded: BoxAuditRecord[]
 
@@ -134,6 +159,17 @@ interface PersistedDiff {
    * 兩邊用 id 串。順序：最新在後（append-only）。
    */
   evidenceMetadata: UploadedEvidence[]
+
+  // ── 階段 10：退費鏈 — Payment 首次成為 mutable ────
+  /**
+   * 新增的 Payment（階段 10 起，退費 issueRefund 會 push amount<0 的 Payment）。
+   *
+   * 種子 Payment 全部在 GENERATED.payments；這邊只放階段 10+ 經 mutation 建立的。
+   * hydrate 時把這些 push 進 MUTABLE.payments（同一個陣列引用）。
+   *
+   * 雖然 union 包正負額（未來補繳付款也走此通道），目前 demo 只有 negative refund。
+   */
+  paymentsAdded: Payment[]
 }
 
 function emptyDiff(): PersistedDiff {
@@ -151,6 +187,7 @@ function emptyDiff(): PersistedDiff {
     transfersPatches: {},
     boxAuditsAdded: [],
     evidenceMetadata: [],
+    paymentsAdded: [],
   }
 }
 
@@ -194,20 +231,29 @@ function applyDiffToGenerated(d: PersistedDiff): void {
   }
 
   // ── 5b. 新增報名 ────────────────────────────────
+  // 階段 9：對 legacy diff（沒 updatedAt 的 Registration）做 fallback
+  // 階段 10：對 legacy diff（沒 refundDecision 的 Registration）補 null
   const existingRegIds = new Set(MUTABLE.registrations.map(r => r.id))
   for (const r of d.registrationsAdded) {
     if (!existingRegIds.has(r.id)) {
-      MUTABLE.registrations.push(r)
+      const enriched: Registration = {
+        ...r,
+        updatedAt: r.updatedAt ?? r.registeredAt,
+        refundDecision: r.refundDecision ?? null,
+      }
+      MUTABLE.registrations.push(enriched)
       existingRegIds.add(r.id)
     }
   }
 
   // ── 5c. Patch 報名狀態 ──────────────────────────
+  // 階段 10：refundDecision 也走此通道（issueRefund / waiveRefund 寫 patches）
   for (const [regId, patch] of Object.entries(d.registrationsPatches)) {
     const r = MUTABLE.registrations.find(x => x.id === regId)
-    if (r && patch.status !== undefined) {
-      r.status = patch.status
-    }
+    if (!r) continue
+    if (patch.status         !== undefined) r.status         = patch.status
+    if (patch.updatedAt      !== undefined) r.updatedAt      = patch.updatedAt
+    if (patch.refundDecision !== undefined) r.refundDecision = patch.refundDecision
   }
 
   // ── 5d. 新增季租單 ──────────────────────────────
@@ -229,6 +275,19 @@ function applyDiffToGenerated(d: PersistedDiff): void {
     if (patch.updatedAt !== undefined) r.updatedAt = patch.updatedAt
   }
 
+  // ── 5b'. 階段 9：對既有 generator 種子 Registration 補 updatedAt ──
+  // 防範性：若 type 升級後跑舊 generator 仍可工作（通常 generator 已補；
+  // 但 hot-reload 期間或測試環境可能例外）
+  // 階段 10：refundDecision 同等防範性補 null
+  for (const r of MUTABLE.registrations) {
+    if (!r.updatedAt) {
+      r.updatedAt = r.registeredAt
+    }
+    if (r.refundDecision === undefined) {
+      r.refundDecision = null
+    }
+  }
+
   // ── 5f. (階段 5) Registration self-report patches ──
   for (const [regId, patch] of Object.entries(d.registrationSelfReportPatches)) {
     const r = MUTABLE.registrations.find(x => x.id === regId)
@@ -237,6 +296,7 @@ function applyDiffToGenerated(d: PersistedDiff): void {
     if (patch.selfPaymentMethod   !== undefined) r.selfPaymentMethod   = patch.selfPaymentMethod
     if (patch.selfPaymentEvidence !== undefined) r.selfPaymentEvidence = patch.selfPaymentEvidence
     if (patch.selfReportedAt      !== undefined) r.selfReportedAt      = patch.selfReportedAt
+    if (patch.updatedAt           !== undefined) r.updatedAt           = patch.updatedAt
   }
 
   // ── 5g. (階段 5) 新增 ProductTransaction ────────
@@ -249,10 +309,15 @@ function applyDiffToGenerated(d: PersistedDiff): void {
   }
 
   // ── 5h. (階段 5) ProductTransfer (in-memory) ────
+  // 階段 9：對 legacy diff（沒 updatedAt 的 ProductTransfer）做 fallback
   const existingTransferIds = new Set(TRANSFERS.map(t => t.id))
   for (const tr of d.transfersAdded) {
     if (!existingTransferIds.has(tr.id)) {
-      TRANSFERS.push(tr)
+      const enriched: ProductTransfer = {
+        ...tr,
+        updatedAt: tr.updatedAt ?? tr.requestedAt,
+      }
+      TRANSFERS.push(enriched)
       existingTransferIds.add(tr.id)
     }
   }
@@ -261,14 +326,31 @@ function applyDiffToGenerated(d: PersistedDiff): void {
     if (!t) continue
     if (patch.status      !== undefined) t.status      = patch.status
     if (patch.completedAt !== undefined) t.completedAt = patch.completedAt
+    if (patch.updatedAt   !== undefined) t.updatedAt   = patch.updatedAt
   }
 
   // ── 5i. (階段 5) BoxAudits (in-memory) ──────────
+  // 階段 9：對 legacy diff（沒 updatedAt）做 fallback
   const existingAuditIds = new Set(BOX_AUDITS.map(a => a.id))
   for (const a of d.boxAuditsAdded) {
     if (!existingAuditIds.has(a.id)) {
-      BOX_AUDITS.push(a)
+      const enriched: BoxAuditRecord = {
+        ...a,
+        updatedAt: a.updatedAt ?? a.auditedAt,
+      }
+      BOX_AUDITS.push(enriched)
       existingAuditIds.add(a.id)
+    }
+  }
+
+  // ── 5j. (階段 10) 新增 Payment（退費鏈：amount<0、status='refunded'）──
+  // 種子 Payment 在 GENERATED.payments；階段 10+ mutation 建立的在 d.paymentsAdded。
+  // hydrate 把後者 push 進 MUTABLE.payments（同一物件，read 函式自動看到）。
+  const existingPaymentIds = new Set(MUTABLE.payments.map(p => p.id))
+  for (const p of d.paymentsAdded) {
+    if (!existingPaymentIds.has(p.id)) {
+      MUTABLE.payments.push(p)
+      existingPaymentIds.add(p.id)
     }
   }
 }
@@ -379,6 +461,8 @@ export function hydrateStore(): void {
         ?? [],
       // 階段 8：evidenceMetadata（純從主 key 讀；無 legacy 來源）
       evidenceMetadata: mainParsed?.evidenceMetadata ?? [],
+      // 階段 10：paymentsAdded（純從主 key 讀；無 legacy 來源；舊版本沒此欄位 → []）
+      paymentsAdded: mainParsed?.paymentsAdded ?? [],
     }
     applyDiffToGenerated(diff)
 
@@ -456,10 +540,28 @@ export function useStoreSync(): number {
 // 8. Public：mutation primitives — 階段 1-4
 // ============================================================
 
-export function patchRegistrationStatus(regId: string, status: RegistrationStatus): void {
+/**
+ * Patch 報名狀態（請假 / 取消請假）。
+ *
+ * 階段 9：可選 `updatedAt` 參數 — 同時 bump entity.updatedAt 與
+ * diff.patches.updatedAt，供樂觀鎖比對使用。不傳則只動 status，
+ * updatedAt 保持原值（向後相容）。
+ */
+export function patchRegistrationStatus(
+  regId: string,
+  status: RegistrationStatus,
+  updatedAt?: string,
+): void {
   const r = MUTABLE.registrations.find(x => x.id === regId)
-  if (r) r.status = status
-  diff.registrationsPatches[regId] = { ...diff.registrationsPatches[regId], status }
+  if (r) {
+    r.status = status
+    if (updatedAt !== undefined) r.updatedAt = updatedAt
+  }
+  diff.registrationsPatches[regId] = {
+    ...diff.registrationsPatches[regId],
+    status,
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
+  }
   persist()
   notify()
 }
@@ -518,7 +620,12 @@ export function setCurrentUserId(userId: string): void {
 // 9. Public：mutation primitives — 階段 5
 // ============================================================
 
-/** 客戶自助回報已付款 — 寫 Registration 4 個自助欄位 */
+/**
+ * 客戶自助回報已付款 — 寫 Registration 4 個自助欄位。
+ *
+ * 階段 9：fields 可帶 `updatedAt` — 同時 bump entity.updatedAt 與
+ * diff.patches.updatedAt，支援樂觀鎖。不傳則 entity.updatedAt 保持原值。
+ */
 export function patchRegistrationSelfReport(
   regId: string,
   fields: {
@@ -526,6 +633,7 @@ export function patchRegistrationSelfReport(
     selfPaymentMethod?: PaymentMethod | null
     selfPaymentEvidence?: string | null
     selfReportedAt?: string | null
+    updatedAt?: string
   },
 ): void {
   const r = MUTABLE.registrations.find(x => x.id === regId)
@@ -534,6 +642,7 @@ export function patchRegistrationSelfReport(
     if (fields.selfPaymentMethod   !== undefined) r.selfPaymentMethod   = fields.selfPaymentMethod
     if (fields.selfPaymentEvidence !== undefined) r.selfPaymentEvidence = fields.selfPaymentEvidence
     if (fields.selfReportedAt      !== undefined) r.selfReportedAt      = fields.selfReportedAt
+    if (fields.updatedAt           !== undefined) r.updatedAt           = fields.updatedAt
   }
   diff.registrationSelfReportPatches[regId] = {
     ...diff.registrationSelfReportPatches[regId],
@@ -559,15 +668,25 @@ export function addProductTransfer(transfer: ProductTransfer): void {
   notify()
 }
 
-/** 更新調貨單狀態（出貨 / 收件 / 完成 / 取消） */
+/**
+ * 更新調貨單狀態（出貨 / 收件 / 完成 / 取消）。
+ *
+ * 階段 9：patch 可帶 `updatedAt` — 同時 bump entity.updatedAt
+ * 與 diff，用於樂觀鎖。
+ */
 export function patchProductTransfer(
   transferId: string,
-  patch: { status?: ProductTransferStatus; completedAt?: string | null },
+  patch: {
+    status?: ProductTransferStatus
+    completedAt?: string | null
+    updatedAt?: string
+  },
 ): void {
   const t = TRANSFERS.find(x => x.id === transferId)
   if (t) {
     if (patch.status      !== undefined) t.status      = patch.status
     if (patch.completedAt !== undefined) t.completedAt = patch.completedAt
+    if (patch.updatedAt   !== undefined) t.updatedAt   = patch.updatedAt
   }
   diff.transfersPatches[transferId] = {
     ...diff.transfersPatches[transferId],
@@ -615,6 +734,50 @@ export function addEvidenceMeta(meta: UploadedEvidence): void {
 export function markEvidenceBlobDeleted(id: string): void {
   const m = diff.evidenceMetadata.find(e => e.id === id)
   if (m) m.blobAvailable = false
+  persist()
+  notify()
+}
+
+
+// ============================================================
+// 9.5 Public：mutation primitives — 階段 10（退費鏈）
+// ============================================================
+
+/**
+ * 新增一筆 Payment（階段 10：通常用於退費，amount < 0、status = 'refunded'）。
+ *
+ * 與 add* 系列一致：push 進 MUTABLE.payments + 寫入 diff.paymentsAdded + persist + notify。
+ * 設計上 union 允許正負額；但目前 demo 範圍只用 refund（負額）。未來若把舊「補繳」
+ * 流程改走 mutation（而非 generator 種子），可重用本 primitive。
+ */
+export function addPayment(payment: Payment): void {
+  MUTABLE.payments.push(payment)
+  diff.paymentsAdded.push(payment)
+  persist()
+  notify()
+}
+
+/**
+ * 標記 Registration 的退費決策（'refunded' / 'waived'，或 reset 為 null）。
+ *
+ * 與其他 patch primitive 一致：bump entity + 寫 patches diff + 可選 updatedAt。
+ * 通常與 addPayment 配對使用（issueRefund mutation），或單獨使用（waiveRefund mutation）。
+ */
+export function patchRegistrationRefund(
+  regId: string,
+  decision: RefundDecision | null,
+  updatedAt?: string,
+): void {
+  const r = MUTABLE.registrations.find(x => x.id === regId)
+  if (r) {
+    r.refundDecision = decision
+    if (updatedAt !== undefined) r.updatedAt = updatedAt
+  }
+  diff.registrationsPatches[regId] = {
+    ...diff.registrationsPatches[regId],
+    refundDecision: decision,
+    ...(updatedAt !== undefined ? { updatedAt } : {}),
+  }
   persist()
   notify()
 }

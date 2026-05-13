@@ -1,8 +1,16 @@
 'use client'
 
-import { use, useMemo } from 'react'
-import { getSession, listSessionRegistrations, listSessions } from '@/data/api'
+import { use, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import {
+  getSession, listSessionRegistrations, listSessions,
+  cancelSession, countPendingRefundsForSession,
+  getCurrentUser,
+} from '@/data/api'
+import { useStoreSync } from '@/data/store'
 import { REGISTRATION_TYPE_LABEL } from '@/types'
+import type { ConflictResult } from '@/types'
+import ConflictBanner from '@/components/ConflictBanner'
 
 const SKILL_LABEL: Record<string, string> = {
   'E':'E','D':'D','C':'C','B':'B','B+':'B+','A':'A','A+':'A+','S':'S','S*':'S*',
@@ -39,7 +47,14 @@ const TYPE_BG: Record<string, { bg: string; text: string }> = {
 
 export default function SessionDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
+
+  // 階段 10：mutation 互動需要訂閱 store 才能看到 cancelSession 後 status 變化
+  const storeVersion = useStoreSync()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
   // 找指定的場次；找不到時退回到「最有戲劇感」的今天場次
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const session = useMemo(() => {
     const s = getSession(id)
     if (s) return s
@@ -48,8 +63,9 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     if (todays.length > 0) return todays.reduce((a, b) =>
       (b.currentCount ?? 0) > (a.currentCount ?? 0) ? b : a)
     return listSessions()[0]
-  }, [id])
+  }, [id, storeVersion])
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const registrations = useMemo(() => {
     if (!session) return []
     return listSessionRegistrations(session.id).map(r => ({
@@ -61,7 +77,26 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
       amount: r.expectedAmount ?? 0,
       customer: r.customer,
     }))
-  }, [session])
+  }, [session, storeVersion])
+
+  // ── 階段 10：取消場次 modal 狀態 ──────────────────────────────
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [conflict, setConflict] = useState<ConflictResult | null>(null)
+  /** 剛取消成功 → 顯示「待退費 N 筆」reminder 橫幅 */
+  const [recentlyCancelled, setRecentlyCancelled] = useState<{ pendingRefundCount: number } | null>(null)
+
+  // baseUpdatedAt snapshot：當 session.updatedAt 改變且非衝突狀態，sync
+  const [baseUpdatedAt, setBaseUpdatedAt] = useState<string>(session?.updatedAt ?? '')
+  useEffect(() => {
+    if (!session) return
+    if (!conflict && session.updatedAt !== baseUpdatedAt) {
+      setBaseUpdatedAt(session.updatedAt)
+    }
+  }, [session, conflict, baseUpdatedAt])
+  const reloadSnapshot = () => {
+    setConflict(null)
+    if (session) setBaseUpdatedAt(session.updatedAt)
+  }
 
   if (!session) {
     return <div style={{ padding: 24 }}>場次不存在。</div>
@@ -73,11 +108,87 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     .filter(r => r.type !== 'season_player' && r.paymentStatus === 'paid')
     .reduce((s, r) => s + r.amount, 0)
 
+  // 可否取消：open / full 狀態才能取消；status='cancelled' / 'completed' 不行
+  const canCancel = mounted && (session.status === 'open' || session.status === 'full')
+  const currentUser = mounted ? getCurrentUser() : null
+
   return (
     <div style={{ padding: 24 }}>
-      <a href="/sessions" style={{ fontSize: 13, color: '#888', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4, marginBottom: 16 }}>
-        ‹ 返回場次列表
-      </a>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+        <a href="/sessions" style={{ fontSize: 13, color: '#888', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          ‹ 返回場次列表
+        </a>
+        {canCancel && (
+          <button
+            type="button"
+            onClick={() => setCancelOpen(true)}
+            style={{
+              padding: '7px 14px', borderRadius: 8,
+              border: '1px solid #fecaca', background: '#fff', color: '#991b1b',
+              fontSize: 12, fontWeight: 600, cursor: 'pointer',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = '#fee2e2' }}
+            onMouseLeave={e => { e.currentTarget.style.background = '#fff' }}
+          >
+            🚫 取消場次
+          </button>
+        )}
+        {session.status === 'cancelled' && (
+          <span style={{ padding: '5px 12px', borderRadius: 8, background: '#fee2e2', color: '#991b1b', fontSize: 12, fontWeight: 600 }}>
+            此場次已取消
+          </span>
+        )}
+      </div>
+
+      {/* 取消後 reminder（顯示一次，按 × 關掉） */}
+      {recentlyCancelled && (
+        <div style={{
+          background: recentlyCancelled.pendingRefundCount > 0 ? '#fff7ed' : '#f0fdf4',
+          border: `1px solid ${recentlyCancelled.pendingRefundCount > 0 ? '#fb923c' : '#86efac'}`,
+          borderRadius: 10, padding: '12px 14px', marginBottom: 12,
+          display: 'flex', alignItems: 'flex-start', gap: 12,
+        }}>
+          <div style={{ fontSize: 20, lineHeight: 1 }}>
+            {recentlyCancelled.pendingRefundCount > 0 ? '💰' : '✓'}
+          </div>
+          <div style={{ flex: 1, fontSize: 13, color: recentlyCancelled.pendingRefundCount > 0 ? '#7c2d12' : '#166534' }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>
+              場次已取消
+              {recentlyCancelled.pendingRefundCount > 0 && (
+                <> · <span style={{ color: '#9a3412' }}>需處理退費</span></>
+              )}
+            </div>
+            {recentlyCancelled.pendingRefundCount > 0 ? (
+              <div>
+                此場次有 <strong>{recentlyCancelled.pendingRefundCount}</strong> 筆已付款報名，請至
+                <Link href="/finance/refunds" style={{
+                  marginLeft: 6, padding: '3px 10px', borderRadius: 6,
+                  background: '#c2410c', color: '#fff', textDecoration: 'none',
+                  fontWeight: 600, fontSize: 12,
+                }}>
+                  退費處理 →
+                </Link>
+                {' '}進行退款或標記放棄退費。
+              </div>
+            ) : (
+              <div>此場次沒有已付款報名，無需處理退費。</div>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setRecentlyCancelled(null)}
+            style={{
+              border: 'none', background: 'transparent', cursor: 'pointer',
+              fontSize: 16, color: '#888', padding: 0, lineHeight: 1,
+            }}
+          >×</button>
+        </div>
+      )}
+
+      {/* 樂觀鎖衝突 banner */}
+      {conflict && (
+        <ConflictBanner conflict={conflict} onReload={reloadSnapshot} onDismiss={() => setConflict(null)} />
+      )}
 
       <div style={{
         background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0',
@@ -190,6 +301,169 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
             </div>
           </div>
         ))}
+      </div>
+
+      {cancelOpen && (
+        <CancelSessionModal
+          sessionLabel={`${session.venueName} · ${session.sessionDate} ${session.startTime}`}
+          baseUpdatedAt={baseUpdatedAt}
+          onClose={() => setCancelOpen(false)}
+          onConflict={c => { setCancelOpen(false); setConflict(c) }}
+          onSuccess={() => {
+            setCancelOpen(false)
+            const n = countPendingRefundsForSession(session.id)
+            setRecentlyCancelled({ pendingRefundCount: n })
+          }}
+          sessionId={session.id}
+          currentUserHint={currentUser?.name ?? null}
+        />
+      )}
+    </div>
+  )
+}
+
+
+// ============================================================
+// 取消場次 modal（階段 10）
+// ============================================================
+
+function CancelSessionModal({
+  sessionId, sessionLabel, baseUpdatedAt, onClose, onConflict, onSuccess, currentUserHint,
+}: {
+  sessionId: string
+  sessionLabel: string
+  baseUpdatedAt: string
+  onClose: () => void
+  onConflict: (c: ConflictResult) => void
+  onSuccess: () => void
+  currentUserHint: string | null
+}) {
+  const [reason, setReason] = useState('')
+  const [notified, setNotified] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // 簡單預檢：算一下此場次「目前」會有幾筆需要退費（給使用者心理準備）
+  const pendingPreview = countPendingRefundsForSession(sessionId)
+
+  function handleSubmit() {
+    if (!reason.trim()) {
+      setErrorMsg('請填寫取消原因（顯示於 audit log）')
+      return
+    }
+    setSubmitting(true)
+    // 「☑ 已通知」勾選 → 串入 reason 文字，方便 audit log 可追
+    const fullReason = notified
+      ? `${reason.trim()}（已通知客戶）`
+      : reason.trim()
+    const result = cancelSession(sessionId, {
+      reason: fullReason,
+      baseUpdatedAt,
+    })
+    setSubmitting(false)
+    if ('conflict' in result && result.conflict) {
+      onConflict(result)
+      return
+    }
+    if (!result.ok) {
+      setErrorMsg(result.reason)
+      return
+    }
+    onSuccess()
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        zIndex: 1000, padding: 16,
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: '#fff', borderRadius: 14, width: '100%', maxWidth: 480,
+          padding: 22, boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
+        }}
+      >
+        <div style={{
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          marginBottom: 16, paddingBottom: 12, borderBottom: '2px solid #991b1b',
+        }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#991b1b' }}>取消場次</h3>
+          <button type="button" onClick={onClose} style={{ border: 'none', background: 'transparent', fontSize: 20, cursor: 'pointer', color: '#888' }}>×</button>
+        </div>
+
+        <div style={{ marginBottom: 14, padding: '10px 12px', background: '#fef2f2', borderRadius: 8, fontSize: 12, color: '#7f1d1d' }}>
+          將取消：<strong>{sessionLabel}</strong>
+          {pendingPreview > 0 && (
+            <div style={{ marginTop: 6 }}>
+              ⚠ 此場次有 <strong>{pendingPreview}</strong> 筆已付款報名，取消後需另至「退費處理」頁面手動處理退款。
+            </div>
+          )}
+        </div>
+
+        <label style={{ display: 'block', marginBottom: 14 }}>
+          <span style={{ fontSize: 12, color: '#666', display: 'block', marginBottom: 4 }}>取消原因（必填、寫入 audit log）</span>
+          <textarea
+            value={reason}
+            onChange={e => { setReason(e.target.value); setErrorMsg(null) }}
+            placeholder="例：教練生病 / 場地臨時不能用 / 報名人數不足..."
+            rows={3}
+            style={{
+              width: '100%', padding: '9px 12px', borderRadius: 8,
+              border: '1px solid #cbc9c2', fontSize: 13, resize: 'vertical',
+              boxSizing: 'border-box', fontFamily: 'inherit',
+            }}
+          />
+        </label>
+
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer', fontSize: 12, color: '#555' }}>
+          <input
+            type="checkbox"
+            checked={notified}
+            onChange={e => setNotified(e.target.checked)}
+            style={{ cursor: 'pointer' }}
+          />
+          <span>我已通知所有已報名客戶（LINE/電話）</span>
+        </label>
+
+        {errorMsg && (
+          <div style={{ padding: '8px 10px', borderRadius: 6, background: '#fee2e2', color: '#991b1b', fontSize: 12, marginBottom: 12 }}>
+            {errorMsg}
+          </div>
+        )}
+
+        {currentUserHint && (
+          <div style={{ fontSize: 11, color: '#aaa', marginBottom: 12 }}>
+            操作者：{currentUserHint}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ padding: '8px 14px', borderRadius: 7, border: '1px solid #cbc9c2', background: '#fff', fontSize: 13, cursor: 'pointer' }}
+          >
+            不取消
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={submitting}
+            style={{
+              padding: '8px 14px', borderRadius: 7, border: 'none',
+              background: '#991b1b', color: '#fff', fontSize: 13, fontWeight: 600,
+              cursor: submitting ? 'not-allowed' : 'pointer',
+              opacity: submitting ? 0.5 : 1,
+            }}
+          >
+            {submitting ? '處理中…' : '確認取消場次'}
+          </button>
+        </div>
       </div>
     </div>
   )

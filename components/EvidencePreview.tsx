@@ -20,6 +20,7 @@ export default function EvidencePreview({
   size = 80,
   showFilename = true,
 }: {
+  key?: string | number
   value: string | null | undefined
   /** 縮圖正方形邊長 px */
   size?: number

@@ -35,6 +35,8 @@ export type PageKey =
   | 'integrations'
   // 階段 8：上傳憑證 admin 列表
   | 'evidence'
+  // 階段 10：退費鏈（cancelSession 後的「待退費」+「退費歷史」）
+  | 'finance/refunds'
 
 export const PAGE_LABEL: Record<PageKey, string> = {
   'dashboard':        '總覽',
@@ -50,6 +52,7 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'audit':            '操作紀錄',
   'integrations':     '整合設定',
   'evidence':         '上傳憑證',
+  'finance/refunds':  '退費處理',
 }
 
 
@@ -101,6 +104,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'integrations':     { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
   // 階段 8：上傳憑證列表 — 與 audit 同層級，owner 限定（檔內含敏感截圖）
   'evidence':         { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
+  // 階段 10：退費處理（與 finance 同層級 — owner 看全部、manager 看自己館、staff 擋）
+  'finance/refunds':  { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
 }
 
 
@@ -108,7 +113,7 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
 // 4. UserVenueRole 種子（generator.ts 凍結，種子放這裡）
 // ============================================================
 // demo 設定：
-//   u1 陳老闆     globalRole='owner'  → 不綁館（owner 看全部）
+//   u1 王家凱     globalRole='owner'  → 不綁館（owner 看全部）
 //   u2 王館主     globalRole='staff'  → 飛翼 v3 manager
 //   u3 李小芳     globalRole='staff'  → 球魔方 v1 manager
 //   u4 工讀生小明 globalRole='staff'  → 飛翼 v3 staff
@@ -140,13 +145,14 @@ export const REAL_USER_ID = 'u1'
 /**
  * 從 URL path 推 page key。
  *
- * 注意 prefix match 順序：finance/payments 要在 finance 之前判斷。
+ * 注意 prefix match 順序：finance/payments、finance/refunds 要在 finance 之前判斷。
  * 對外公開頁（/captain/[token]、/book/[venue]、/login）回 null —
  * 這些不在權限矩陣管轄範圍（主揪走 token、訂場是公開頁、登入頁本身）。
  */
 export function pathToPageKey(path: string): PageKey | null {
   const ordered: ReadonlyArray<readonly [PageKey, string]> = [
     ['finance/payments', '/finance/payments'],
+    ['finance/refunds',  '/finance/refunds'],
     ['dashboard',        '/dashboard'],
     ['sessions',         '/sessions'],
     ['checkin',          '/checkin'],

@@ -38,18 +38,20 @@ const ALL_LINKS: NavLink[] = [
   { pageKey: 'reconciliation',   href: '/reconciliation',   label: '對帳系統', icon: '⚖️' },
   { pageKey: 'captains',         href: '/captains',         label: '主揪管理', icon: '🎯' },
   { pageKey: 'finance/payments', href: '/finance/payments', label: '報表匯出', icon: '📤' },
+  { pageKey: 'finance/refunds',  href: '/finance/refunds',  label: '退費處理', icon: '💸' },
   { pageKey: 'audit',            href: '/audit',            label: '操作紀錄', icon: '🔍' },
   { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證', icon: '📎' },
   { pageKey: 'integrations',     href: '/integrations',     label: '整合設定', icon: '🔗' },
 ]
 
 const BOOKING_LINKS = [
-  { href: '/book/flywing',    label: '飛翼館', icon: '🏐' },
-  { href: '/book/ace',        label: 'Ace 館', icon: '🏐' },
-  { href: '/book/magicblock', label: '球魔方', icon: '🏐' },
-  { href: '/book/hibi',       label: '日日館', icon: '🏐' },
-  { href: '/book/playone',    label: 'Playone',icon: '🏐' },
-  { href: '/book/smash',      label: '就醬瘋',  icon: '🏐' },
+  { href: '/book/flywing',    label: '飛翼',     icon: '🏐' },
+  { href: '/book/ace2.0',     label: 'Ace 2.0',  icon: '🏐' },
+  { href: '/book/ace3.0',     label: 'Ace 3.0',  icon: '🏐' },
+  { href: '/book/magicblock', label: '球魔方 2.0', icon: '🏐' },
+  { href: '/book/hibi',       label: 'Hibi 日日', icon: '🏐' },
+  { href: '/book/playone',    label: 'play one', icon: '🏐' },
+  { href: '/book/smash',      label: '就醬瘋',    icon: '🏐' },
 ]
 
 export default function Sidebar() {
