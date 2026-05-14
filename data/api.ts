@@ -4518,6 +4518,31 @@ export async function deleteEvidenceById(id: string): Promise<{ ok: true } | { o
 import type { ConflictResult } from '@/types'
 
 /**
+ * Type predicate：判斷 mutation 回傳是否為 ConflictResult。
+ *
+ * 階段 11：TS 5.x 對 `'conflict' in result && result.conflict` 的
+ * narrowing 不會把 `{ ok: true }` / `{ ok: false; reason }` 排除掉，
+ * 導致 `setConflict(result)` 型別錯誤。改用此 type predicate，TS 5.x
+ * 也能正確 narrow 為 ConflictResult。
+ *
+ * 用法：
+ *   const result = someMutation(...)
+ *   if (isConflictResult(result)) {
+ *     setConflict(result)  // 已 narrow 為 ConflictResult
+ *     return
+ *   }
+ *   if (!result.ok) { ... }
+ */
+export function isConflictResult(r: unknown): r is ConflictResult {
+  return (
+    typeof r === 'object' &&
+    r !== null &&
+    'conflict' in r &&
+    (r as { conflict: unknown }).conflict === true
+  )
+}
+
+/**
  * snapshot 比對 helper。
  *
  * 用法：
