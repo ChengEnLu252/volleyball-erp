@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { listSessions, listVenues, getCurrentVisibleVenueIds } from '@/data/api'
+import Link from 'next/link'
+import { listSessions, listVenues, getCurrentVisibleVenueIds, getCurrentEffectiveRole } from '@/data/api'
 import { useStoreSync } from '@/data/store'
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
@@ -42,6 +43,9 @@ export default function SessionsPage() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const role = useMemo(() => mounted ? getCurrentEffectiveRole() : 'owner', [mounted, storeVersion])
+  const canCreate = role === 'owner' || role === 'manager'
 
   const today = new Date().toISOString().split('T')[0]
   const inTwoWeeks = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
@@ -56,9 +60,31 @@ export default function SessionsPage() {
 
   return (
     <div style={{ padding: 24 }}>
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>場次管理</h1>
-        <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>今日所有球館場次</p>
+      <div style={{
+        marginBottom: 24, display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12,
+      }}>
+        <div>
+          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>場次管理</h1>
+          <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>今日所有球館場次</p>
+        </div>
+        {canCreate ? (
+          <Link href="/sessions/new" style={{
+            padding: '10px 18px', borderRadius: 8, background: '#1a1917', color: '#fff',
+            textDecoration: 'none', fontSize: 13, fontWeight: 600,
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}>
+            + 新增場次
+          </Link>
+        ) : (
+          <button disabled title="新增場次需館長以上權限" style={{
+            padding: '10px 18px', borderRadius: 8, background: '#e8e6e0', color: '#aaa',
+            border: 'none', fontSize: 13, fontWeight: 600,
+            cursor: 'not-allowed',
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}>
+            + 新增場次
+          </button>
+        )}
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>

@@ -22,10 +22,10 @@
 
 import { GENERATED } from './generator'
 import type {
-  Venue, User, Customer, Session, SessionStatus, Registration,
+  Venue, User, Customer, Session, SessionStatus, SessionType, NetHeight, Registration,
   Payment, Product, ProductTransaction, Timeslot, Season, SeasonRental,
   SeasonRentalStatus, AnomalyAlert, UnpaidRegistration,
-  VenueDailySummary, DashboardData,
+  VenueDailySummary, DashboardData, SkillLevel,
 } from '@/types'
 
 
@@ -162,6 +162,11 @@ export function listTimeslots(venueId?: string): Timeslot[] {
   return result
 }
 
+/** 階段 12 新增：依 id 查 timeslot（給新增場次頁帶入預設值用） */
+export function getTimeslot(id: string): Timeslot | null {
+  return GENERATED.timeslots.find(t => t.id === id) ?? null
+}
+
 
 // ── SeasonRentals ───────────────────────────────────────────
 
@@ -240,49 +245,238 @@ export function listVenueSummaries(date?: string): VenueDailySummary[] {
 // 二、客戶端報名頁專用（自有 shape）
 // ============================================================
 
-const VENUE_BY_SLUG_RAW: Record<string, { id: string; name: string; address: string; phone: string; transferInfo: string }> = {
-  flywing:    { id: 'v3', name: '飛翼排球館',     address: '新北市新莊區新北大道四段182-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 飛翼體育' },
-  'ace2.0':   { id: 'v2', name: 'Ace 2.0 排球館', address: '新北市林口區中北二街2-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育' },
-  'ace3.0':   { id: 'v7', name: 'Ace 3.0 排球館', address: '新北市中和區莒光路211-33號',           phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育' },
-  magicblock: { id: 'v1', name: '球魔方 2.0 排球館', address: '新北市五股區更寮里中興路二段37巷13號', phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 球魔方' },
-  hibi:       { id: 'v4', name: 'Hibi 日日排球館',  address: '桃園市中壢區忠孝路420號',               phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 日日體育' },
-  playone:    { id: 'v5', name: 'play one 排球館', address: '桃園市八德區巧克力街16-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx play one' },
-  smash:      { id: 'v6', name: '就醬瘋排球館',     address: '新竹市東區科園里園區二路221-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 就醬瘋' },
+/**
+ * VENUE_BY_SLUG_RAW — 客戶端報名頁的「公開球館資料」對照。
+ *
+ * 階段 12 擴充：加 `lineOfficialUrl` 與 `brandSubtitle`。
+ * 七個 LINE 官方帳號連結為館主提供的真實連結。
+ *
+ * slug 設計：未來 prod 子網域化只要把 host (`ace2.0.volleyops.tw`) 
+ * 在 middleware 反查回 slug 即可，頁面層完全不動。
+ */
+const VENUE_BY_SLUG_RAW: Record<string, {
+  id: string
+  name: string
+  brandSubtitle: string
+  address: string
+  phone: string
+  transferInfo: string
+  lineOfficialUrl: string
+}> = {
+  flywing:    { id: 'v3', name: '飛翼排球館',       brandSubtitle: 'Flywing Volleyball',  address: '新北市新莊區新北大道四段182-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 飛翼體育',   lineOfficialUrl: 'https://lin.ee/OUyU1V8' },
+  'ace2.0':   { id: 'v2', name: 'Ace 2.0 排球館',   brandSubtitle: 'Ace 2.0 Linkou',      address: '新北市林口區中北二街2-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育',   lineOfficialUrl: 'https://lin.ee/WoQsNoH' },
+  'ace3.0':   { id: 'v7', name: 'Ace 3.0 排球館',   brandSubtitle: 'Ace 3.0 Zhonghe',     address: '新北市中和區莒光路211-33號',           phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育',   lineOfficialUrl: 'https://line.me/R/ti/p/@347cbbmr' },
+  magicblock: { id: 'v1', name: '球魔方 2.0 排球館', brandSubtitle: 'MagicBlock 2.0',      address: '新北市五股區更寮里中興路二段37巷13號', phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 球魔方',     lineOfficialUrl: 'https://lin.ee/Z6p1ypq3' },
+  hibi:       { id: 'v4', name: 'Hibi 日日排球館',  brandSubtitle: 'Hibi · Everyday',     address: '桃園市中壢區忠孝路420號',               phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 日日體育',   lineOfficialUrl: 'https://lin.ee/Haahm4QM' },
+  playone:    { id: 'v5', name: 'play one 排球館',  brandSubtitle: 'play one',            address: '桃園市八德區巧克力街16-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx play one',   lineOfficialUrl: 'https://lin.ee/7ZXoZoP6' },
+  smash:      { id: 'v6', name: '就醬瘋排球館',     brandSubtitle: 'Smash & Crazy',       address: '新竹市東區科園里園區二路221-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 就醬瘋',     lineOfficialUrl: 'https://lin.ee/I9ghtiC' },
 }
 
 export type PublicVenueInfo = typeof VENUE_BY_SLUG_RAW[string]
+
+/** 取所有公開館（給後台「報名管理」用館切換器消費） */
+export function listPublicVenues(): Array<PublicVenueInfo & { slug: string }> {
+  return Object.entries(VENUE_BY_SLUG_RAW).map(([slug, info]) => ({ slug, ...info }))
+}
+
+/** 反查 slug from venueId（後台「點開報名頁」連結用） */
+export function getSlugByVenueId(venueId: string): string | null {
+  const entry = Object.entries(VENUE_BY_SLUG_RAW).find(([, info]) => info.id === venueId)
+  return entry ? entry[0] : null
+}
 
 export function getVenueBySlug(slug: string): PublicVenueInfo | null {
   return VENUE_BY_SLUG_RAW[slug] ?? null
 }
 
-const _NEXT_WEEK = dateAddDays(TODAY_STR, 7)
-const _TWO_WEEKS = dateAddDays(TODAY_STR, 14)
+// ----------------------------------------------------------------
+// 階段 12 重寫：PublicSession 改從 GENERATED.sessions 動態推導
+// ----------------------------------------------------------------
+// 階段 10 之前是 5 筆 PUBLIC_SESSIONS_RAW 寫死。
+// 階段 12 報名頁要顯示「未來 60 天 × 7 館 ~1500 場」，寫死不可能；
+// 改用 derive 函式：拿底層 Session、過濾未來/open/非主揪、附 currentCount。
+//
+// 設計選擇：
+//   1. price 拆成 courtFee + acFee 兩個欄位，UI 自己決定顯示「$280 + $50 冷氣」
+//      (依館主指示)，不再給單一 price 欄。
+//   2. hasAircon = 「這場有設冷氣可開」（acFee > 0），
+//      acEnabled = 「這場館長已決定要開」(底層 Session.acEnabled)。
+//   3. currentCount 即時從 registrations 算（filter status !== 'cancelled'）。
+//   4. status 由底層 Session.status + 容量比對推導：
+//      - 底層 cancelled → 'cancelled'
+//      - 容量已滿 → 'full'
+//      - 否則 → 'open'
+//   5. 不過濾「歷史日期」— 那個交給呼叫端 (listSessionsByVenueAndDate)。
 
-/** 客人端報名頁的場次預覽（自有 shape，含 price 欄位） */
-const PUBLIC_SESSIONS_RAW = [
-  { id: 'ps1', venueId: 'v3', sessionDate: TODAY_STR, startTime: '15:40', endTime: '18:40', sessionType: 'male_mixed',   netHeight: 'male',   price: 280, maxCapacity: 18, currentCount: 13, minSkillRequired: 'B',  status: 'open',  notes: '男女不限，B 以上' },
-  { id: 'ps2', venueId: 'v3', sessionDate: TODAY_STR, startTime: '19:00', endTime: '22:00', sessionType: 'male_only',    netHeight: 'male',   price: 300, maxCapacity: 18, currentCount: 18, minSkillRequired: 'A',  status: 'full',  notes: '純男場，A 以上' },
-  { id: 'ps3', venueId: 'v3', sessionDate: _NEXT_WEEK, startTime: '09:00', endTime: '12:00', sessionType: 'female_mixed', netHeight: 'female', price: 220, maxCapacity: 18, currentCount: 6,  minSkillRequired: null, status: 'open',  notes: '女網混排，不限程度' },
-  { id: 'ps4', venueId: 'v3', sessionDate: _NEXT_WEEK, startTime: '15:40', endTime: '18:40', sessionType: 'male_mixed',   netHeight: 'male',   price: 280, maxCapacity: 18, currentCount: 9,  minSkillRequired: 'B',  status: 'open',  notes: '男女混排，B 以上' },
-  { id: 'ps5', venueId: 'v3', sessionDate: _TWO_WEEKS, startTime: '12:20', endTime: '15:20', sessionType: 'female_only',  netHeight: 'female', price: 220, maxCapacity: 18, currentCount: 0,  minSkillRequired: null, status: 'open',  notes: '純女場，不限程度' },
-] as const
+export interface PublicSession {
+  id: string
+  venueId: string
+  sessionDate: string
+  startTime: string
+  endTime: string
+  sessionType: string
+  netHeight: string
+  /** 球費（基本場費，不含冷氣） */
+  courtFee: number
+  /** 冷氣費（每人加收；0 = 此場沒設冷氣） */
+  acFee: number
+  /** 這場館長是否已決定開冷氣 */
+  acEnabled: boolean
+  /** 這場「有冷氣可開」（acFee > 0） */
+  hasAircon: boolean
+  maxCapacity: number
+  currentCount: number
+  minSkillRequired: string | null
+  maxSkillAllowed: string | null
+  status: 'open' | 'full' | 'cancelled'
+  notes: string | null
+  /** 場地（旗艦館「A 場 / B 場」、其他館為 null） */
+  court: string | null
+}
 
-export type PublicSession = typeof PUBLIC_SESSIONS_RAW[number]
+/** 內部 helper：把底層 Session 轉為 PublicSession shape */
+function toPublicSession(session: typeof GENERATED.sessions[number]): PublicSession {
+  const currentCount = GENERATED.registrations.filter(
+    r => r.sessionId === session.id && r.status !== 'cancelled'
+  ).length
+  let status: PublicSession['status']
+  if (session.status === 'cancelled') status = 'cancelled'
+  else if (currentCount >= session.maxCapacity) status = 'full'
+  else status = 'open'
+  return {
+    id: session.id,
+    venueId: session.venueId,
+    sessionDate: session.sessionDate,
+    startTime: session.startTime,
+    endTime: session.endTime,
+    sessionType: session.sessionType,
+    netHeight: session.netHeight,
+    courtFee: session.courtFee,
+    acFee: session.acFee,
+    acEnabled: session.acEnabled,
+    hasAircon: session.acFee > 0,
+    maxCapacity: session.maxCapacity,
+    currentCount,
+    minSkillRequired: session.minSkillRequired,
+    maxSkillAllowed: session.maxSkillAllowed,
+    status,
+    notes: session.notes,
+    court: session.court,
+  }
+}
 
+/**
+ * 全館（或指定館）的公開場次清單。
+ * 預設僅取「今日起未來 60 天」+「非主揪場」+「非取消」。
+ */
 export function listPublicSessions(venueId?: string): PublicSession[] {
-  return venueId ? PUBLIC_SESSIONS_RAW.filter(s => s.venueId === venueId) : [...PUBLIC_SESSIONS_RAW]
+  const today = TODAY_STR
+  const horizon = dateAddDays(today, 60)
+  return GENERATED.sessions
+    .filter(s => (venueId ? s.venueId === venueId : true))
+    .filter(s => s.sessionDate >= today && s.sessionDate <= horizon)
+    .filter(s => s.seasonRentalId === null)        // 主揪場不在公開報名
+    .filter(s => s.status !== 'cancelled')
+    .map(toPublicSession)
+    .sort((a, b) => (a.sessionDate + a.startTime).localeCompare(b.sessionDate + b.startTime))
 }
 
 export function getPublicSession(id: string): PublicSession | null {
-  return PUBLIC_SESSIONS_RAW.find(s => s.id === id) ?? null
+  const session = GENERATED.sessions.find(s => s.id === id)
+  return session ? toPublicSession(session) : null
 }
 
+/**
+ * 指定館 + 指定日期的場次（報名頁「選日期 → 看當日場次」用）。
+ * 不過濾主揪場吗？— 過濾。客人看不到主揪場。
+ */
+export function listSessionsByVenueAndDate(venueId: string, date: string): PublicSession[] {
+  return GENERATED.sessions
+    .filter(s => s.venueId === venueId && s.sessionDate === date)
+    .filter(s => s.seasonRentalId === null)
+    .filter(s => s.status !== 'cancelled')
+    .map(toPublicSession)
+    .sort((a, b) => a.startTime.localeCompare(b.startTime))
+}
+
+/**
+ * 指定館「未來 N 天內有場次的日期」+ 該日場次數 / 缺額總數。
+ * 給月曆「哪天有場次、還剩多少缺額」用。
+ */
+export function listBookingDatesWithSessions(
+  venueId: string,
+  fromDate: string,
+  days: number,
+): Array<{ date: string; sessionCount: number; openSessionCount: number; remainingSeats: number }> {
+  const toDate = dateAddDays(fromDate, days)
+  const byDate = new Map<string, { sessionCount: number; openSessionCount: number; remainingSeats: number }>()
+  for (const s of GENERATED.sessions) {
+    if (s.venueId !== venueId) continue
+    if (s.sessionDate < fromDate || s.sessionDate > toDate) continue
+    if (s.seasonRentalId !== null) continue
+    if (s.status === 'cancelled') continue
+    const currentCount = GENERATED.registrations.filter(
+      r => r.sessionId === s.id && r.status !== 'cancelled'
+    ).length
+    const remaining = Math.max(0, s.maxCapacity - currentCount)
+    const entry = byDate.get(s.sessionDate) ?? { sessionCount: 0, openSessionCount: 0, remainingSeats: 0 }
+    entry.sessionCount += 1
+    if (remaining > 0) entry.openSessionCount += 1
+    entry.remainingSeats += remaining
+    byDate.set(s.sessionDate, entry)
+  }
+  return Array.from(byDate.entries())
+    .map(([date, info]) => ({ date, ...info }))
+    .sort((a, b) => a.date.localeCompare(b.date))
+}
+
+/**
+ * 後台「報名管理」用：給定館，未來 N 天的「按日 × 場次」彙整。
+ */
+export function getVenueBookingOverview(venueId: string, days: number = 14): {
+  totalSessions: number
+  totalRegistrations: number
+  totalRemainingSeats: number
+  totalCapacity: number
+  byDate: Array<{ date: string; sessions: PublicSession[] }>
+} {
+  const today = TODAY_STR
+  const toDate = dateAddDays(today, days)
+  const sessions = GENERATED.sessions
+    .filter(s => s.venueId === venueId)
+    .filter(s => s.sessionDate >= today && s.sessionDate <= toDate)
+    .filter(s => s.seasonRentalId === null)
+    .filter(s => s.status !== 'cancelled')
+    .map(toPublicSession)
+    .sort((a, b) => (a.sessionDate + a.startTime).localeCompare(b.sessionDate + b.startTime))
+  let totalRegistrations = 0
+  let totalCapacity = 0
+  const byDateMap = new Map<string, PublicSession[]>()
+  for (const s of sessions) {
+    totalRegistrations += s.currentCount
+    totalCapacity += s.maxCapacity
+    const arr = byDateMap.get(s.sessionDate) ?? []
+    arr.push(s)
+    byDateMap.set(s.sessionDate, arr)
+  }
+  return {
+    totalSessions: sessions.length,
+    totalRegistrations,
+    totalRemainingSeats: Math.max(0, totalCapacity - totalRegistrations),
+    totalCapacity,
+    byDate: Array.from(byDateMap.entries()).map(([date, list]) => ({ date, sessions: list })),
+  }
+}
+
+// 包場時段預覽（給未來有 v3 飛翼包場展示用，與報名場無關）
+const _NEXT_WEEK_R = dateAddDays(TODAY_STR, 7)
+const _TWO_WEEKS_R = dateAddDays(TODAY_STR, 14)
+
 const RENTAL_SLOTS_RAW = [
-  { id: 'r1', venueId: 'v3', venueName: '飛翼排球館', date: _NEXT_WEEK, startTime: '09:00', endTime: '12:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'available', notes: '可協商延長' },
-  { id: 'r2', venueId: 'v3', venueName: '飛翼排球館', date: _NEXT_WEEK, startTime: '19:00', endTime: '22:00', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '晚場，假日加收 $200' },
-  { id: 'r3', venueId: 'v3', venueName: '飛翼排球館', date: _TWO_WEEKS, startTime: '09:00', endTime: '12:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'pending',   notes: '洽談中' },
-  { id: 'r4', venueId: 'v3', venueName: '飛翼排球館', date: _TWO_WEEKS, startTime: '15:40', endTime: '18:40', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '假日下午場' },
+  { id: 'r1', venueId: 'v3', venueName: '飛翼排球館', date: _NEXT_WEEK_R, startTime: '09:00', endTime: '12:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'available', notes: '可協商延長' },
+  { id: 'r2', venueId: 'v3', venueName: '飛翼排球館', date: _NEXT_WEEK_R, startTime: '19:00', endTime: '22:00', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '晚場，假日加收 $200' },
+  { id: 'r3', venueId: 'v3', venueName: '飛翼排球館', date: _TWO_WEEKS_R, startTime: '09:00', endTime: '12:00', pricePerHour: 1200, totalHours: 3, totalPrice: 3600, status: 'pending',   notes: '洽談中' },
+  { id: 'r4', venueId: 'v3', venueName: '飛翼排球館', date: _TWO_WEEKS_R, startTime: '15:40', endTime: '18:40', pricePerHour: 1500, totalHours: 3, totalPrice: 4500, status: 'available', notes: '假日下午場' },
 ] as const
 
 export type RentalSlot = typeof RENTAL_SLOTS_RAW[number]
@@ -1513,6 +1707,8 @@ import {
   getAuditLogs, getCurrentUserId,
   patchRegistrationStatus, patchSeasonRental,
   setCurrentUserId as storeSetCurrentUserId,
+  // 階段 12：新增場次
+  addSession as storeAddSession,
 } from './store'
 
 // ── 7.1 ID / token 產生（runtime，不走 Mulberry seed） ─────────
@@ -5122,4 +5318,283 @@ export function countPendingRefundsForSession(sessionId: string): number {
     count++
   }
   return count
+}
+
+
+// ============================================================
+// 十六、新增場次 (階段 12) — 範本批量 + 單場手動
+// ============================================================
+// 兩種建立路徑共用 storeAddSession primitive + writeAudit('CREATE_SESSION')：
+//   1. expandTimeslotToSessions — 範本批量：選 timeslot + 週數 → 一次展開 N 筆
+//   2. createCustomSession      — 單場手動：完全自訂或 timeslot 帶入後微調
+//
+// 設計選擇：
+//   - 「同 timeslot + 同日期」已存在 Session 時，batch 自動 skip 該日期（不報錯，預覽會標示）
+//   - 不做 startTime/endTime 衝突偵測（同 timeslot 已是排好的時段邏輯，跨 timeslot 衝突極少）
+//   - Session.createdBy = 當前登入 user.id
+//   - 新建場次預設 status='open' / acEnabled=false（除非 form 給 true）/ isUnattended=false
+//   - 範本批量不允許跨館（timeslot.venueId 即決定館）
+// ============================================================
+
+// Session / SessionType / NetHeight / SkillLevel 已於檔頂 import
+
+/** 把 Date 物件 format 成 YYYY-MM-DD（避免時區飄）*/
+function fmtDateYMD(d: Date): string {
+  const y = d.getFullYear()
+  const m = (d.getMonth() + 1).toString().padStart(2, '0')
+  const dd = d.getDate().toString().padStart(2, '0')
+  return `${y}-${m}-${dd}`
+}
+
+// ── 16.1 範本批量：預覽 ──────────────────────────────────────────
+
+/**
+ * 預覽：從某 timeslot 出發，往未來 N 週展開出來的「日期清單」。
+ * 不寫任何資料；只回報 (date, skip 與否, 原因)。
+ *
+ * 邏輯：
+ *   - 找 fromDate 之後（含當日）第一個符合 timeslot.dayOfWeek 的日期當起點
+ *   - 之後每 7 天遞增，共 weeks 個
+ *   - 對每個日期 check：GENERATED.sessions 是否已有 (timeslotId, sessionDate) 同組
+ *     （含 cancelled — 取消的也算占用，否則 user 看不出來為何 skip）
+ *   - 若已存在 → skip=true，reason 註明
+ */
+export function previewBatchSessionExpansion(args: {
+  timeslotId: string
+  fromDate: string  // YYYY-MM-DD，通常是今天
+  weeks: number     // 2 / 4 / 8 / 12
+}): { ok: false; reason: string } | {
+  ok: true
+  timeslot: Timeslot
+  venueName: string
+  dates: Array<{ date: string; skip: boolean; reason: string | null }>
+  totalNew: number
+  totalSkipped: number
+} {
+  const ts = GENERATED.timeslots.find(t => t.id === args.timeslotId)
+  if (!ts) return { ok: false, reason: '找不到此時段範本' }
+  if (args.weeks <= 0 || args.weeks > 26) return { ok: false, reason: '週數需介於 1~26' }
+
+  const venueName = GENERATED.venues.find(v => v.id === ts.venueId)?.name ?? '未知球館'
+
+  // 從 fromDate 起，找第一個符合 ts.dayOfWeek 的日期
+  const start = new Date(args.fromDate + 'T00:00:00')
+  const startDow = start.getDay()
+  const offset = (ts.dayOfWeek - startDow + 7) % 7
+  start.setDate(start.getDate() + offset)
+
+  const dates: Array<{ date: string; skip: boolean; reason: string | null }> = []
+  let totalNew = 0
+  let totalSkipped = 0
+
+  for (let i = 0; i < args.weeks; i++) {
+    const d = new Date(start)
+    d.setDate(start.getDate() + i * 7)
+    const dateStr = fmtDateYMD(d)
+    const existing = GENERATED.sessions.find(
+      s => s.timeslotId === ts.id && s.sessionDate === dateStr,
+    )
+    if (existing) {
+      const reason = existing.status === 'cancelled'
+        ? '此日已有相同範本場次（已取消，保留紀錄）'
+        : '此日已有相同範本場次'
+      dates.push({ date: dateStr, skip: true, reason })
+      totalSkipped++
+    } else {
+      dates.push({ date: dateStr, skip: false, reason: null })
+      totalNew++
+    }
+  }
+
+  return { ok: true, timeslot: ts, venueName, dates, totalNew, totalSkipped }
+}
+
+
+// ── 16.2 範本批量：實際建立 ─────────────────────────────────────
+
+/**
+ * 範本批量建立 sessions。
+ *
+ * 拿 preview 的結果中 skip=false 的日期，逐筆建 Session：
+ *   - id = `s-{timeslotId}-{dateStr}` (與 generator 命名一致)
+ *   - 大部分欄位從 timeslot.default* 帶入
+ *   - acFee 預設 0、acEnabled 預設 false（由開場員當日決定，不在新增時設定）
+ *   - 一律 write 一筆 audit log，記錄此次建了哪些日期
+ *
+ * 為了減少 audit log 噪音：N 筆 sessions 只寫一筆 audit（newValues 列出所有 sessionIds），
+ * 但若中途某筆寫入失敗（不該發生），會 partial commit 已建的不 rollback。
+ */
+export function expandTimeslotToSessions(args: {
+  timeslotId: string
+  fromDate: string
+  weeks: number
+  notes?: string | null
+}): { ok: false; reason: string } | {
+  ok: true
+  createdSessionIds: string[]
+  skippedDates: string[]
+} {
+  const preview = previewBatchSessionExpansion({
+    timeslotId: args.timeslotId,
+    fromDate: args.fromDate,
+    weeks: args.weeks,
+  })
+  if (!preview.ok) return preview
+
+  const ts = preview.timeslot
+  const venueName = preview.venueName
+  const actor = getAdminActor()
+  const now = new Date().toISOString()
+  const uid = getCurrentUserId()
+
+  const createdSessionIds: string[] = []
+  const skippedDates: string[] = []
+
+  for (const entry of preview.dates) {
+    if (entry.skip) {
+      skippedDates.push(entry.date)
+      continue
+    }
+    const id = `s-${ts.id}-${entry.date}`
+    const session: Session = {
+      id,
+      venueId: ts.venueId,
+      timeslotId: ts.id,
+      seasonRentalId: null,
+      createdBy: uid,
+      sessionDate: entry.date,
+      startTime: ts.startTime,
+      endTime: ts.endTime,
+      court: ts.court,
+      netHeight: ts.defaultNetHeight,
+      sessionType: ts.defaultSessionType,
+      courtFee: ts.defaultCourtFee,
+      acFee: 0,
+      acEnabled: false,
+      maxCapacity: ts.defaultMaxCapacity,
+      minSkillRequired: ts.defaultMinSkillRequired,
+      maxSkillAllowed: ts.defaultMaxSkillAllowed,
+      status: 'open',
+      isUnattended: false,
+      notes: args.notes ?? null,
+      createdAt: now,
+      updatedAt: now,
+      venueName,
+    }
+    storeAddSession(session)
+    createdSessionIds.push(id)
+  }
+
+  // 一筆彙整 audit（避免 N 筆 spam）
+  writeAudit({
+    actor,
+    venue: venueName,
+    action: 'CREATE_SESSION',
+    entityType: 'Timeslot',
+    entityId: ts.id,
+    targetLabel: `${venueName} · ${ts.label ?? `${ts.startTime}-${ts.endTime}`}`,
+    detail: `範本批量展開 ${createdSessionIds.length} 筆場次${skippedDates.length > 0 ? `（略過 ${skippedDates.length} 筆已存在日期）` : ''}`,
+    newValues: {
+      source: 'batch',
+      timeslotId: ts.id,
+      weeks: args.weeks,
+      createdSessionIds,
+      skippedDates,
+    },
+  })
+
+  return { ok: true, createdSessionIds, skippedDates }
+}
+
+
+// ── 16.3 單場手動建立 ──────────────────────────────────────────
+
+/**
+ * 單場手動建立場次。
+ *
+ * 用於：
+ *   - 臨時加場（無對應週週 timeslot）
+ *   - 雖然有 timeslot 但本次 session 設定需與範本不同（手動帶入並調整）
+ *
+ * timeslotId 可為 null（臨時場次）。
+ */
+export function createCustomSession(args: {
+  venueId: string
+  timeslotId?: string | null
+  sessionDate: string  // YYYY-MM-DD
+  startTime: string    // HH:mm
+  endTime: string      // HH:mm
+  court?: string | null
+  netHeight: NetHeight
+  sessionType: SessionType
+  courtFee: number
+  acFee?: number
+  acEnabled?: boolean
+  maxCapacity: number
+  minSkillRequired?: SkillLevel | null
+  maxSkillAllowed?: SkillLevel | null
+  notes?: string | null
+}): { ok: false; reason: string } | { ok: true; sessionId: string } {
+  // 基本驗證
+  const venue = GENERATED.venues.find(v => v.id === args.venueId)
+  if (!venue) return { ok: false, reason: '找不到此球館' }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(args.sessionDate)) return { ok: false, reason: '日期格式錯誤' }
+  if (!/^\d{2}:\d{2}$/.test(args.startTime) || !/^\d{2}:\d{2}$/.test(args.endTime)) {
+    return { ok: false, reason: '時間格式錯誤' }
+  }
+  if (args.startTime >= args.endTime) return { ok: false, reason: '結束時間需晚於開始時間' }
+  if (args.courtFee < 0)   return { ok: false, reason: '球費不可為負' }
+  if (args.maxCapacity <= 0) return { ok: false, reason: '容量上限需 > 0' }
+
+  const actor = getAdminActor()
+  const now = new Date().toISOString()
+  const uid = getCurrentUserId()
+  const id = `s-custom-${Date.now().toString(36)}-${Math.floor(Math.random() * 0xffff).toString(16)}`
+
+  const session: Session = {
+    id,
+    venueId: args.venueId,
+    timeslotId: args.timeslotId ?? null,
+    seasonRentalId: null,
+    createdBy: uid,
+    sessionDate: args.sessionDate,
+    startTime: args.startTime,
+    endTime: args.endTime,
+    court: args.court ?? null,
+    netHeight: args.netHeight,
+    sessionType: args.sessionType,
+    courtFee: args.courtFee,
+    acFee: args.acFee ?? 0,
+    acEnabled: args.acEnabled ?? false,
+    maxCapacity: args.maxCapacity,
+    minSkillRequired: args.minSkillRequired ?? null,
+    maxSkillAllowed: args.maxSkillAllowed ?? null,
+    status: 'open',
+    isUnattended: false,
+    notes: args.notes ?? null,
+    createdAt: now,
+    updatedAt: now,
+    venueName: venue.name,
+  }
+
+  storeAddSession(session)
+
+  writeAudit({
+    actor,
+    venue: venue.name,
+    action: 'CREATE_SESSION',
+    entityType: 'Session',
+    entityId: id,
+    targetLabel: `${venue.name} · ${args.sessionDate} ${args.startTime}-${args.endTime}`,
+    detail: `單場手動新增${args.timeslotId ? '（基於範本）' : '（臨時場次）'}`,
+    newValues: {
+      source: 'manual',
+      timeslotId: args.timeslotId ?? null,
+      sessionType: args.sessionType,
+      courtFee: args.courtFee,
+      maxCapacity: args.maxCapacity,
+    },
+  })
+
+  return { ok: true, sessionId: id }
 }

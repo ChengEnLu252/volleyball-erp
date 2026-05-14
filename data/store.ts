@@ -42,6 +42,8 @@ import type {
   UploadedEvidence,
   // 階段 10：Payment 首次變 mutable（退費鏈），RefundDecision 為終局決策
   Payment, RefundDecision,
+  // 階段 12：addSession mutation
+  Session,
 } from '@/types'
 
 // 階段 9：移除階段 6 留下的 type re-export。
@@ -65,6 +67,7 @@ const MUTABLE = GENERATED as unknown as {
   seasonRentals: SeasonRental[]
   productTransactions: ProductTransaction[]  // 階段 5 加：誠實商店盤點 adjustment / 調貨 adjustment
   payments: Payment[]                         // 階段 10 加：退費鏈會 push negative Payment
+  sessions: Session[]                          // 階段 12 加：新增場次 mutation 用
 }
 
 
@@ -170,6 +173,15 @@ interface PersistedDiff {
    * 雖然 union 包正負額（未來補繳付款也走此通道），目前 demo 只有 negative refund。
    */
   paymentsAdded: Payment[]
+
+  // ── 階段 12 新增：館長/老闆新增場次（範本批量 + 單場手動共用此通道）
+  /**
+   * 新增的 Session（階段 12 起，由 ERP 後台「新增場次」功能建立的）。
+   *
+   * 種子 Session 全部在 GENERATED.sessions；這邊只放階段 12+ 經 mutation 建立的。
+   * hydrate 時把這些 push 進 MUTABLE.sessions（同一個陣列引用）。
+   */
+  sessionsAdded: Session[]
 }
 
 function emptyDiff(): PersistedDiff {
@@ -188,6 +200,7 @@ function emptyDiff(): PersistedDiff {
     boxAuditsAdded: [],
     evidenceMetadata: [],
     paymentsAdded: [],
+    sessionsAdded: [],
   }
 }
 
@@ -353,6 +366,16 @@ function applyDiffToGenerated(d: PersistedDiff): void {
       existingPaymentIds.add(p.id)
     }
   }
+
+  // ── 5k. (階段 12) 新增 Session（範本批量 + 單場手動的新場次）──
+  // 種子 Session 在 GENERATED.sessions；階段 12+ mutation 建立的在 d.sessionsAdded。
+  const existingSessionIds = new Set(MUTABLE.sessions.map(s => s.id))
+  for (const s of d.sessionsAdded) {
+    if (!existingSessionIds.has(s.id)) {
+      MUTABLE.sessions.push(s)
+      existingSessionIds.add(s.id)
+    }
+  }
 }
 
 function notify(): void {
@@ -463,6 +486,8 @@ export function hydrateStore(): void {
       evidenceMetadata: mainParsed?.evidenceMetadata ?? [],
       // 階段 10：paymentsAdded（純從主 key 讀；無 legacy 來源；舊版本沒此欄位 → []）
       paymentsAdded: mainParsed?.paymentsAdded ?? [],
+      // 階段 12：sessionsAdded（純從主 key 讀；無 legacy 來源；舊版本沒此欄位 → []）
+      sessionsAdded: mainParsed?.sessionsAdded ?? [],
     }
     applyDiffToGenerated(diff)
 
@@ -753,6 +778,24 @@ export function markEvidenceBlobDeleted(id: string): void {
 export function addPayment(payment: Payment): void {
   MUTABLE.payments.push(payment)
   diff.paymentsAdded.push(payment)
+  persist()
+  notify()
+}
+
+/**
+ * 階段 12 新增：新增一筆 Session（場次）。
+ *
+ * 用於館長/老闆透過 ERP 後台「新增場次」UI 建立的場次。
+ * 範本批量 / 單場手動 兩種建立方式共用此 primitive；
+ * 差別只在「上層 mutation 一次叫幾次」。
+ *
+ * 跟其他 add* 一致：push 進 MUTABLE.sessions + 寫入 diff.sessionsAdded + persist + notify。
+ *
+ * ⚠️ 此 primitive 不做業務檢核（重複日期 / 衝突偵測等），呼叫端 api.ts 負責。
+ */
+export function addSession(session: Session): void {
+  MUTABLE.sessions.push(session)
+  diff.sessionsAdded.push(session)
   persist()
   notify()
 }

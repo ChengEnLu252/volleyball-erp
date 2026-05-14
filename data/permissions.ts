@@ -37,6 +37,8 @@ export type PageKey =
   | 'evidence'
   // 階段 10：退費鏈（cancelSession 後的「待退費」+「退費歷史」）
   | 'finance/refunds'
+  // 階段 12：報名熱度看板（按館 × 按日聚合的未來兩週狀態）
+  | 'booking-overview'
 
 export const PAGE_LABEL: Record<PageKey, string> = {
   'dashboard':        '總覽',
@@ -53,6 +55,7 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'integrations':     '整合設定',
   'evidence':         '上傳憑證',
   'finance/refunds':  '退費處理',
+  'booking-overview': '報名熱度',
 }
 
 
@@ -106,6 +109,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'evidence':         { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
   // 階段 10：退費處理（與 finance 同層級 — owner 看全部、manager 看自己館、staff 擋）
   'finance/refunds':  { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // 階段 12：報名熱度看板（owner 看全部、manager 看自己館、staff 也可看 — 跟 sessions 同層）
+  'booking-overview': { owner: 'full', manager: 'own_venue', staff: 'own_venue', none: 'denied' },
 }
 
 
@@ -153,6 +158,7 @@ export function pathToPageKey(path: string): PageKey | null {
   const ordered: ReadonlyArray<readonly [PageKey, string]> = [
     ['finance/payments', '/finance/payments'],
     ['finance/refunds',  '/finance/refunds'],
+    ['booking-overview', '/booking-overview'],
     ['dashboard',        '/dashboard'],
     ['sessions',         '/sessions'],
     ['checkin',          '/checkin'],

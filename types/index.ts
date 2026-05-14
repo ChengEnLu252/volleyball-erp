@@ -943,6 +943,8 @@ export type AuditAction =
   | 'ADJUST_STOCK'
   | 'UPDATE_SESSION'
   | 'CANCEL_SESSION'
+  /** 階段 12 新增：館長/老闆建立新場次（範本批量 / 單場手動皆用此 action） */
+  | 'CREATE_SESSION'
   // ── ✨ 階段 1.1 新增：主揪相關 ───────────────────
   /** 主揪用 token 登入 */
   | 'CAPTAIN_LOGIN'

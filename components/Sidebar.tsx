@@ -30,6 +30,7 @@ interface NavLink {
 const ALL_LINKS: NavLink[] = [
   { pageKey: 'dashboard',        href: '/dashboard',        label: '總覽',     icon: '▦'  },
   { pageKey: 'sessions',         href: '/sessions',         label: '場次管理', icon: '📋' },
+  { pageKey: 'booking-overview', href: '/booking-overview', label: '報名熱度', icon: '📈' },
   { pageKey: 'checkin',          href: '/checkin',          label: '前台操作', icon: '✓'  },
   { pageKey: 'customers',        href: '/customers',        label: '客戶資料', icon: '👤' },
   { pageKey: 'products',         href: '/products',         label: '商品管理', icon: '📦' },

@@ -23,6 +23,8 @@ const ACTION_STYLE: Record<AuditAction, ActionStyle> = {
   ADJUST_STOCK:               { label: '庫存調整',      color: '#1e40af', bg: '#dbeafe' },
   UPDATE_SESSION:             { label: '場次調整',      color: '#92400e', bg: '#fef3c7' },
   CANCEL_SESSION:             { label: '取消場次',      color: '#991b1b', bg: '#fee2e2' },
+  // 階段 12：館長/老闆建立新場次（範本批量 + 單場手動）
+  CREATE_SESSION:             { label: '新增場次',      color: '#166534', bg: '#dcfce7' },
   // 階段 1.1 主揪相關 ─────────────────
   CAPTAIN_LOGIN:              { label: '主揪登入',      color: '#6b7280', bg: '#f3f4f6' },
   MARK_ATTENDANCE_BY_CAPTAIN: { label: '主揪簽到',      color: '#166534', bg: '#dcfce7' },
