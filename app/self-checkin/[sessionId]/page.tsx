@@ -295,7 +295,7 @@ function SelfReportModal({
     if (!result.ok) {
       // 樂觀鎖衝突 → ConflictBanner 接手，不關 modal
       if ('conflict' in result && result.conflict) {
-        setConflict(result)
+        setConflict(result as ConflictResult)
         return
       }
       setErr(result.reason)

@@ -389,7 +389,7 @@ function TransferActionButtons({
     setBusy(false)
     if (r.ok) return
     if ('conflict' in r && r.conflict) {
-      onConflict(r)
+      onConflict(r as ConflictResult)
       return
     }
     setErr(r.reason)

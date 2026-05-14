@@ -362,7 +362,7 @@ function CancelSessionModal({
     })
     setSubmitting(false)
     if ('conflict' in result && result.conflict) {
-      onConflict(result)
+      onConflict(result as ConflictResult)
       return
     }
     if (!result.ok) {

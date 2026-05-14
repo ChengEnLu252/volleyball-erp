@@ -277,7 +277,7 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
     if (!r.ok) {
       // 階段 8：先檢查是否衝突；衝突走 banner，其他錯誤走 alert
       if ('conflict' in r && r.conflict) {
-        setConflict(r)
+        setConflict(r as ConflictResult)
         return
       }
       alert(`⚠️ ${r.reason}`)
@@ -304,7 +304,7 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
     const r = adminDeactivateRental(rental.id, { baseUpdatedAt })
     if (!r.ok) {
       if ('conflict' in r && r.conflict) {
-        setConflict(r)
+        setConflict(r as ConflictResult)
         return
       }
       alert(`⚠️ ${r.reason}`)

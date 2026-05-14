@@ -635,7 +635,7 @@ function SeasonPlayerLeaveRow({
       : captainMarkLeave({ rentalId, registrationId: reg.id, baseUpdatedAt })
 
     if ('conflict' in result && result.conflict) {
-      setConflict(result)
+      setConflict(result as ConflictResult)
       return
     }
     if (!result.ok) {
