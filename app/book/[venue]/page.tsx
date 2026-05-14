@@ -26,14 +26,29 @@ export default function VenueBookHome({ params }: { params: Promise<{ venue: str
   if (!venueInfo) notFound()
 
   const todayStr = today()
+  // 階段 12：
+  //   - BOOKING_OPEN_DAYS = 開放報名的窗口（一般館長只開未來兩週的場次）
+  //   - CALENDAR_VIEW_DAYS = 月曆可瀏覽範圍（一整年，讓用戶能往後翻看後續月份）
+  //     兩週外的日期在月曆會顯示為 disabled (沒場次)，但格子仍可見
+  const BOOKING_OPEN_DAYS = 14
+  const CALENDAR_VIEW_DAYS = 365
+
   const dates = useMemo(
-    () => listBookingDatesWithSessions(venueInfo.id, todayStr, 60),
+    () => listBookingDatesWithSessions(venueInfo.id, todayStr, BOOKING_OPEN_DAYS),
     [venueInfo.id, todayStr],
   )
 
   const totalSessions = dates.reduce((s, d) => s + d.sessionCount, 0)
   const totalOpenSessions = dates.reduce((s, d) => s + d.openSessionCount, 0)
   const totalRemainingSeats = dates.reduce((s, d) => s + d.remainingSeats, 0)
+
+  // 月曆翻月上限：今日 +365 天（讓月曆能看到後續一整年）
+  const maxDate = useMemo(() => {
+    const d = new Date(todayStr + 'T00:00:00')
+    d.setDate(d.getDate() + CALENDAR_VIEW_DAYS)
+    const pad = (n: number) => n.toString().padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+  }, [todayStr])
 
   return (
     <BookingShell venueSlug={venue} venueInfo={venueInfo} hero>
@@ -42,12 +57,12 @@ export default function VenueBookHome({ params }: { params: Promise<{ venue: str
         marginTop: 24, marginBottom: 32,
         display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10,
       }}>
-        <StatCard label="未來 60 天" value={`${totalSessions}`} suffix="場" />
+        <StatCard label="未來兩週" value={`${totalSessions}`} suffix="場" />
         <StatCard label="可報名場次" value={`${totalOpenSessions}`} suffix="場" highlight />
         <StatCard label="剩餘名額" value={`${totalRemainingSeats}`} suffix="位" />
       </section>
 
-      <BookingCalendar venueSlug={venue} availableDates={dates} />
+      <BookingCalendar venueSlug={venue} availableDates={dates} maxDate={maxDate} />
 
       {/* 注意事項 */}
       <section style={{

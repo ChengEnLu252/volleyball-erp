@@ -135,6 +135,8 @@ export default function Sidebar() {
       <aside id="sidebar" style={{
         width: 210, background: '#1a1917', color: '#f5f4f0',
         display: 'flex', flexDirection: 'column', flexShrink: 0,
+        // 階段 12 修：sticky + 100vh，避免長頁面把 sidebar 撐高、底部 picker 被擠出 viewport
+        position: 'sticky', top: 0, height: '100vh', overflow: 'hidden',
       }}>
         <div style={{ padding: '20px 20px 16px', borderBottom: '1px solid #333' }}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>VolleyOps</div>
