@@ -16,8 +16,13 @@
 
 import { BOOKING_COLORS, BOOKING_FONTS, BOOKING_RADIUS } from './theme'
 import { LineIcon } from './BookingShell'
+import { seedDemoHistoryIfNeeded } from '@/data/my-bookings'
 
 const SESSION_KEY = 'volleyops-booking-line-user'
+
+/** Mock 階段固定 user ID — 同一 demo session 看到累積的「我的預定」紀錄。
+ *  未來換真 LINE OAuth 時，這常數會被 callback 中的真實 LINE userId 取代。 */
+const MOCK_FIXED_USER_ID = 'mock-line-demo-user'
 
 export interface LineUser {
   userId: string         // 對應 LINE 的 user ID（mock 時隨機產生）
@@ -44,18 +49,21 @@ export function clearLineUser(): void {
 
 /**
  * 未來接真實 LINE Login 時把此函式換成 OAuth 流程。
- * 現階段：直接模擬一個帳號寫進 sessionStorage。
+ * 現階段：用「固定 mock user」讓同 demo session 中累積的「我的預定」資料看得到。
+ * 同時若是首次登入，會 seed 3 筆歷史報名作為 demo 展示資料。
  */
 export function signInWithLine(): Promise<LineUser> {
   // ⛔ 真實實作會 redirect 到 LINE OAuth URL，此處 mock。
   return new Promise(resolve => {
     setTimeout(() => {
       const mockUser: LineUser = {
-        userId: `mock-line-${Math.random().toString(36).slice(2, 10)}`,
+        userId: MOCK_FIXED_USER_ID,
         displayName: '測試用戶',
         pictureUrl: null,
       }
       setLineUser(mockUser)
+      // 首次登入時，幫這個 user seed demo 歷史報名（從 GENERATED 過去場次抽 3 筆）
+      seedDemoHistoryIfNeeded(mockUser.userId, mockUser.displayName)
       resolve(mockUser)
     }, 600)
   })

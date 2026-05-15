@@ -3,36 +3,42 @@
 // ============================================================
 // components/booking/BookingShell.tsx
 // ============================================================
+// 階段 13 改寫。
+//
 // 客戶端報名頁的「品牌殼」— 統一 header / 背景 / footer。
-// 7 個館共用同一套配色，但 header 顯示各館名稱與副標。
+// 7 個館共用同一套配色。
 //
-// 設計：
-//   - 上方：館品牌區塊（漸層粉底，serif 大字館名）
-//   - 中段：children
-//   - 下方：footer，含 LINE 官方帳號 CTA + 地址
+// 改寫重點：
+//   - 移除舊的 Hero（粉紅漸層大標）和 CompactBar
+//   - 改用新的 BookingHeader（sticky bar + tab nav + 登入鈕）
+//   - 保留 Footer（LINE 官方 CTA + 地址）
 //
-// 注意這個檔特意 import client-side 字體（從 Google Fonts CDN）—
-// 因為 root layout 沒 import 字體，這裡用 <link> + style tag 自己 inject。
+// 注意這個檔特意 import client-side 字體（從 Google Fonts CDN）。
 // ============================================================
 
-import Link from 'next/link'
-import { BOOKING_COLORS, BOOKING_FONTS, BOOKING_SHADOWS, BOOKING_RADIUS } from './theme'
+import { BOOKING_COLORS, BOOKING_FONTS, BOOKING_RADIUS } from './theme'
+import BookingHeader from './BookingHeader'
 import type { PublicVenueInfo } from '@/data/api'
 
 interface Props {
   venueSlug: string
   venueInfo: PublicVenueInfo
-  /** 是否要顯示 hero（首頁顯示，內頁折疊為 compact bar） */
-  hero?: boolean
-  /** 內頁時顯示的麵包屑/標題 */
+  /** 顯示在 header 底部的麵包屑文字（例：「5月15日 星期五 · 09:00」） */
   breadcrumb?: string
-  /** 上一頁連結（內頁回首頁用） */
+  /**
+   * @deprecated 階段 13 後 hero 拿掉了，這個 prop 留著只為了不破壞舊呼叫。
+   *             下一輪會清掉。
+   */
+  hero?: boolean
+  /**
+   * @deprecated 同上
+   */
   backHref?: string
   children: React.ReactNode
 }
 
 export default function BookingShell({
-  venueSlug, venueInfo, hero = false, breadcrumb, backHref, children,
+  venueSlug, venueInfo, breadcrumb, children,
 }: Props) {
   return (
     <>
@@ -43,7 +49,7 @@ export default function BookingShell({
         rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;600;700&family=Noto+Serif+TC:wght@500;700;900&display=swap"
       />
-      {/* 報名頁全域 reset — 用 dangerouslySetInnerHTML 避免 SSR/CSR mismatch */}
+      {/* 報名頁全域 reset */}
       <style dangerouslySetInnerHTML={{ __html: `
         .booking-root {
           background: ${BOOKING_COLORS.bgPrimary};
@@ -58,12 +64,12 @@ export default function BookingShell({
       `}} />
 
       <div className="booking-root">
-
-        {hero ? <Hero venueInfo={venueInfo} /> : <CompactBar venueInfo={venueInfo} breadcrumb={breadcrumb} backHref={backHref} venueSlug={venueSlug} />}
+        <BookingHeader venueSlug={venueSlug} venueInfo={venueInfo} breadcrumb={breadcrumb} />
 
         <main style={{
-          maxWidth: 720, margin: '0 auto',
-          padding: hero ? '0 20px 100px' : '16px 20px 100px',
+          maxWidth: 720,
+          margin: '0 auto',
+          padding: '20px 16px 80px',
         }}>
           {children}
         </main>
@@ -74,105 +80,8 @@ export default function BookingShell({
   )
 }
 
-
 // ─────────────────────────────────────────────────────────────
-// Hero — 首頁用，大字 + 漸層粉底
-// ─────────────────────────────────────────────────────────────
-function Hero({ venueInfo }: { venueInfo: PublicVenueInfo }) {
-  return (
-    <header style={{
-      background: `linear-gradient(155deg, ${BOOKING_COLORS.pinkSoft} 0%, ${BOOKING_COLORS.bgPrimary} 70%)`,
-      padding: '48px 20px 36px',
-      position: 'relative',
-      overflow: 'hidden',
-    }}>
-      {/* 裝飾性粉圓 (左上) */}
-      <div style={{
-        position: 'absolute', top: -80, left: -60, width: 220, height: 220, borderRadius: '50%',
-        background: BOOKING_COLORS.pink, opacity: 0.22, filter: 'blur(8px)',
-      }} />
-      {/* 裝飾性粉圓 (右下) */}
-      <div style={{
-        position: 'absolute', bottom: -100, right: -50, width: 240, height: 240, borderRadius: '50%',
-        background: BOOKING_COLORS.pink, opacity: 0.14, filter: 'blur(20px)',
-      }} />
-
-      <div style={{ maxWidth: 720, margin: '0 auto', position: 'relative' }}>
-        <div style={{
-          fontSize: 11, letterSpacing: 4, color: BOOKING_COLORS.textSecondary,
-          fontWeight: 500, marginBottom: 10, textTransform: 'uppercase',
-        }}>
-          {venueInfo.brandSubtitle}
-        </div>
-        <h1 style={{
-          fontFamily: BOOKING_FONTS.display,
-          fontSize: 38, fontWeight: 700, margin: '0 0 14px',
-          letterSpacing: '-0.5px',
-          color: BOOKING_COLORS.textPrimary,
-        }}>
-          {venueInfo.name}
-        </h1>
-        <div style={{
-          fontSize: 13, color: BOOKING_COLORS.textSecondary,
-          maxWidth: 480, lineHeight: 1.7,
-        }}>
-          📍 {venueInfo.address}
-        </div>
-      </div>
-    </header>
-  )
-}
-
-
-// ─────────────────────────────────────────────────────────────
-// CompactBar — 內頁用，窄條 header 帶返回鈕
-// ─────────────────────────────────────────────────────────────
-function CompactBar({ venueInfo, venueSlug, breadcrumb, backHref }: {
-  venueInfo: PublicVenueInfo; venueSlug: string; breadcrumb?: string; backHref?: string
-}) {
-  return (
-    <header style={{
-      background: BOOKING_COLORS.bgCard,
-      borderBottom: `1px solid ${BOOKING_COLORS.borderLight}`,
-      padding: '14px 20px',
-      position: 'sticky', top: 0, zIndex: 50,
-      backdropFilter: 'saturate(160%) blur(8px)',
-    }}>
-      <div style={{
-        maxWidth: 720, margin: '0 auto',
-        display: 'flex', alignItems: 'center', gap: 14,
-      }}>
-        <Link href={backHref ?? `/book/${venueSlug}`} style={{
-          fontSize: 22, color: BOOKING_COLORS.pinkDeep, textDecoration: 'none',
-          width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          borderRadius: 8,
-        }}>
-          ‹
-        </Link>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontFamily: BOOKING_FONTS.display, fontSize: 15, fontWeight: 700,
-            color: BOOKING_COLORS.textPrimary, lineHeight: 1.2,
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          }}>
-            {venueInfo.name}
-          </div>
-          {breadcrumb && (
-            <div style={{
-              fontSize: 11, color: BOOKING_COLORS.textMuted, marginTop: 2,
-            }}>
-              {breadcrumb}
-            </div>
-          )}
-        </div>
-      </div>
-    </header>
-  )
-}
-
-
-// ─────────────────────────────────────────────────────────────
-// Footer — LINE 官方帳號 CTA + 版權
+// Footer — LINE 官方帳號 CTA + 地址
 // ─────────────────────────────────────────────────────────────
 function Footer({ venueInfo }: { venueInfo: PublicVenueInfo }) {
   return (
@@ -180,23 +89,43 @@ function Footer({ venueInfo }: { venueInfo: PublicVenueInfo }) {
       borderTop: `1px solid ${BOOKING_COLORS.borderLight}`,
       padding: '36px 20px 48px',
       background: BOOKING_COLORS.bgSecondary,
-      marginTop: 80,
+      marginTop: 60,
     }}>
       <div style={{
-        maxWidth: 720, margin: '0 auto',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18,
+        maxWidth: 720,
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 18,
       }}>
-        <a href={venueInfo.lineOfficialUrl} target="_blank" rel="noopener noreferrer" style={{
-          display: 'inline-flex', alignItems: 'center', gap: 10,
-          background: BOOKING_COLORS.lineGreen, color: '#fff',
-          padding: '12px 26px', borderRadius: BOOKING_RADIUS.pill,
-          textDecoration: 'none', fontWeight: 600, fontSize: 14,
-          boxShadow: '0 4px 14px rgba(6, 199, 85, 0.28)',
-        }}>
+        <a
+          href={venueInfo.lineOfficialUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 10,
+            background: BOOKING_COLORS.lineGreen,
+            color: '#fff',
+            padding: '12px 26px',
+            borderRadius: BOOKING_RADIUS.pill,
+            textDecoration: 'none',
+            fontWeight: 600,
+            fontSize: 14,
+            boxShadow: '0 4px 14px rgba(6, 199, 85, 0.28)',
+          }}
+        >
           <LineIcon size={20} />
           加入官方 LINE
         </a>
-        <div style={{ textAlign: 'center', color: BOOKING_COLORS.textMuted, fontSize: 11.5, lineHeight: 1.8 }}>
+        <div style={{
+          textAlign: 'center',
+          color: BOOKING_COLORS.textMuted,
+          fontSize: 11.5,
+          lineHeight: 1.8,
+        }}>
           <div>{venueInfo.name}</div>
           <div>{venueInfo.address}</div>
           <div style={{ marginTop: 6 }}>有任何疑問請透過官方 LINE 聯繫我們</div>
@@ -205,7 +134,6 @@ function Footer({ venueInfo }: { venueInfo: PublicVenueInfo }) {
     </footer>
   )
 }
-
 
 // ─────────────────────────────────────────────────────────────
 // LINE icon (inline SVG, 不依賴 lib)

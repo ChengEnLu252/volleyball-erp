@@ -262,14 +262,18 @@ const VENUE_BY_SLUG_RAW: Record<string, {
   phone: string
   transferInfo: string
   lineOfficialUrl: string
+  /** LINE 社群連結（場次成團通知 / 缺額 / 失物招領 / 場次更改通知）—
+   *  舊飛翼用 https://reurl.cc/5D002n；其他館未整理。空字串表示尚未提供，
+   *  UI 會自動隱藏該行。階段 13.1 預留。 */
+  lineCommunityUrl: string
 }> = {
-  flywing:    { id: 'v3', name: '飛翼排球館',       brandSubtitle: 'Flywing Volleyball',  address: '新北市新莊區新北大道四段182-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 飛翼體育',   lineOfficialUrl: 'https://lin.ee/OUyU1V8' },
-  'ace2.0':   { id: 'v2', name: 'Ace 2.0 排球館',   brandSubtitle: 'Ace 2.0 Linkou',      address: '新北市林口區中北二街2-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育',   lineOfficialUrl: 'https://lin.ee/WoQsNoH' },
-  'ace3.0':   { id: 'v7', name: 'Ace 3.0 排球館',   brandSubtitle: 'Ace 3.0 Zhonghe',     address: '新北市中和區莒光路211-33號',           phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育',   lineOfficialUrl: 'https://line.me/R/ti/p/@347cbbmr' },
-  magicblock: { id: 'v1', name: '球魔方 2.0 排球館', brandSubtitle: 'MagicBlock 2.0',      address: '新北市五股區更寮里中興路二段37巷13號', phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 球魔方',     lineOfficialUrl: 'https://lin.ee/Z6p1ypq3' },
-  hibi:       { id: 'v4', name: 'Hibi 日日排球館',  brandSubtitle: 'Hibi · Everyday',     address: '桃園市中壢區忠孝路420號',               phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 日日體育',   lineOfficialUrl: 'https://lin.ee/Haahm4QM' },
-  playone:    { id: 'v5', name: 'play one 排球館',  brandSubtitle: 'play one',            address: '桃園市八德區巧克力街16-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx play one',   lineOfficialUrl: 'https://lin.ee/7ZXoZoP6' },
-  smash:      { id: 'v6', name: '就醬瘋排球館',     brandSubtitle: 'Smash & Crazy',       address: '新竹市東區科園里園區二路221-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 就醬瘋',     lineOfficialUrl: 'https://lin.ee/I9ghtiC' },
+  flywing:    { id: 'v3', name: '飛翼排球館',       brandSubtitle: 'Flywing Volleyball',  address: '新北市新莊區新北大道四段182-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 飛翼體育',   lineOfficialUrl: 'https://lin.ee/OUyU1V8',          lineCommunityUrl: '' },
+  'ace2.0':   { id: 'v2', name: 'Ace 2.0 排球館',   brandSubtitle: 'Ace 2.0 Linkou',      address: '新北市林口區中北二街2-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育',   lineOfficialUrl: 'https://lin.ee/WoQsNoH',          lineCommunityUrl: '' },
+  'ace3.0':   { id: 'v7', name: 'Ace 3.0 排球館',   brandSubtitle: 'Ace 3.0 Zhonghe',     address: '新北市中和區莒光路211-33號',           phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx Ace 體育',   lineOfficialUrl: 'https://line.me/R/ti/p/@347cbbmr', lineCommunityUrl: '' },
+  magicblock: { id: 'v1', name: '球魔方 2.0 排球館', brandSubtitle: 'MagicBlock 2.0',      address: '新北市五股區更寮里中興路二段37巷13號', phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 球魔方',     lineOfficialUrl: 'https://lin.ee/Z6p1ypq3',         lineCommunityUrl: '' },
+  hibi:       { id: 'v4', name: 'Hibi 日日排球館',  brandSubtitle: 'Hibi · Everyday',     address: '桃園市中壢區忠孝路420號',               phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 日日體育',   lineOfficialUrl: 'https://lin.ee/Haahm4QM',         lineCommunityUrl: '' },
+  playone:    { id: 'v5', name: 'play one 排球館',  brandSubtitle: 'play one',            address: '桃園市八德區巧克力街16-1號',             phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx play one',   lineOfficialUrl: 'https://lin.ee/7ZXoZoP6',         lineCommunityUrl: '' },
+  smash:      { id: 'v6', name: '就醬瘋排球館',     brandSubtitle: 'Smash & Crazy',       address: '新竹市東區科園里園區二路221-2號',       phone: '', transferInfo: '玉山銀行 808-xxxx-xxxxxx 就醬瘋',     lineOfficialUrl: 'https://lin.ee/I9ghtiC',          lineCommunityUrl: '' },
 }
 
 export type PublicVenueInfo = typeof VENUE_BY_SLUG_RAW[string]

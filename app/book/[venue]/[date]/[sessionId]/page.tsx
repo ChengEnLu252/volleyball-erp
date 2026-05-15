@@ -23,6 +23,7 @@ import BookingShell from '@/components/booking/BookingShell'
 import LineLoginModal, {
   getLineUser, clearLineUser, type LineUser,
 } from '@/components/booking/LineLoginModal'
+import { addMyBooking } from '@/data/my-bookings'
 import {
   BOOKING_COLORS, BOOKING_FONTS, BOOKING_RADIUS,
   SESSION_TYPE_LABEL, SESSION_TYPE_TAG_COLOR,
@@ -113,6 +114,25 @@ export default function SessionDetailPage({ params, searchParams }: {
     setSubmitting(true)
     // 階段 12 mock — 真實實作會 call addRegistration mutation + audit log
     await new Promise(r => setTimeout(r, 900))
+
+    // 階段 13：寫入「我的預定」sessionStorage，供 /book/[venue]/me 頁讀取
+    if (lineUser) {
+      addMyBooking(lineUser.userId, {
+        sessionId,
+        venueId: venueInfo!.id,
+        venueName: venueInfo!.name,
+        venueSlug: venue,
+        sessionDate: date,
+        startTime: session!.startTime,
+        endTime: session!.endTime,
+        sessionType: session!.sessionType,
+        registrantName: nickname.trim() || lineUser.displayName,
+        isWaitlist,
+        totalFee: totalPrice,
+        payMethod,
+      })
+    }
+
     const qs = new URLSearchParams({
       venue, date, session: sessionId,
       method: payMethod,

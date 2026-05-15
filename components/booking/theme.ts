@@ -31,6 +31,11 @@ export const BOOKING_COLORS = {
   /** 粉邊 */
   pinkBorder: '#f1d4dd',
 
+  /** 可愛運動風 — 強調活力的亮粉 (CTA / Logo 用) */
+  pinkVivid: '#ff6b9d',
+  /** 強調活力的亮粉 — 文字版（對比比 deep 高） */
+  pinkVividDeep: '#e54877',
+
   /** 文字 — 帶粉的深紫，比純黑柔 */
   textPrimary: '#3d2a30',
   textSecondary: '#7a5b65',
