@@ -41,11 +41,29 @@ export default function SessionsPage() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
+  // 使用者選擇的 dropdown 篩選條件（'all' 表示不篩選）
+  const [selectedVenueId, setSelectedVenueId] = useState<string>('all')
+  const [selectedType, setSelectedType] = useState<string>('all')
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const role = useMemo(() => mounted ? getCurrentEffectiveRole() : 'owner', [mounted, storeVersion])
   const canCreate = role === 'owner' || role === 'manager'
+
+  // 球館 dropdown 選項 — 依角色可見範圍裁切
+  const venuesForDropdown = useMemo(() => {
+    const all = listVenues()
+    if (visible === 'all') return all
+    return all.filter(v => visible.includes(v.id))
+  }, [visible])
+
+  // 角色可見範圍變動時，若目前選的 venue 不在可見範圍 → reset 回 all
+  useEffect(() => {
+    if (visible !== 'all' && selectedVenueId !== 'all' && !visible.includes(selectedVenueId)) {
+      setSelectedVenueId('all')
+    }
+  }, [visible, selectedVenueId])
 
   const today = new Date().toISOString().split('T')[0]
   const inTwoWeeks = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
@@ -54,9 +72,19 @@ export default function SessionsPage() {
     const raw = listSessions({ dateFrom: today, dateTo: inTwoWeeks })
       .filter(s => s.status !== 'cancelled')
       .sort((a, b) => a.sessionDate.localeCompare(b.sessionDate) || a.startTime.localeCompare(b.startTime))
-    if (visible === 'all') return raw
-    return raw.filter(s => visible.includes(s.venueId))
-  }, [today, inTwoWeeks, visible])
+
+    // (1) 先套角色可見範圍
+    let result = visible === 'all' ? raw : raw.filter(s => visible.includes(s.venueId))
+    // (2) 再套使用者選的球館
+    if (selectedVenueId !== 'all') {
+      result = result.filter(s => s.venueId === selectedVenueId)
+    }
+    // (3) 最後套使用者選的場次類型
+    if (selectedType !== 'all') {
+      result = result.filter(s => s.sessionType === selectedType)
+    }
+    return result
+  }, [today, inTwoWeeks, visible, selectedVenueId, selectedType])
 
   return (
     <div style={{ padding: 24 }}>
@@ -88,16 +116,23 @@ export default function SessionsPage() {
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <select style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}>
-          <option>所有球館</option>
-          {listVenues().map(v => <option key={v.id}>{v.name}</option>)}
+        <select
+          value={selectedVenueId}
+          onChange={e => setSelectedVenueId(e.target.value)}
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}
+        >
+          <option value="all">所有球館</option>
+          {venuesForDropdown.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
         </select>
-        <select style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}>
-          <option>所有類型</option>
-          <option>新手場</option>
-          <option>中階場</option>
-          <option>進階場</option>
-          <option>混合場</option>
+        <select
+          value={selectedType}
+          onChange={e => setSelectedType(e.target.value)}
+          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}
+        >
+          <option value="all">所有類型</option>
+          {Object.entries(SESSION_TYPE_LABEL).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
         </select>
       </div>
 

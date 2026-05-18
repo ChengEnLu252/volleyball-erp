@@ -1715,6 +1715,9 @@ import {
   setCurrentUserId as storeSetCurrentUserId,
   // 階段 12：新增場次
   addSession as storeAddSession,
+  // 階段 14：登入狀態
+  getIsAuthenticated as storeGetIsAuthenticated,
+  setIsAuthenticated as storeSetIsAuthenticated,
 } from './store'
 
 // ── 7.1 ID / token 產生（runtime，不走 Mulberry seed） ─────────
@@ -2236,6 +2239,43 @@ export function switchCurrentUser(userId: string): void {
 /** 列出所有 user — sidebar dropdown 用 */
 export function listAllUsers(): User[] {
   return GENERATED.users
+}
+
+
+// ── 7.8 階段 14：真實登入體驗 ──────────────────────────────────
+// Demo 用「假登入」流程，但給示範者「真的有權限驗證」的感受：
+//   - login(userId, password)：驗密碼 → 設 currentUserId + isAuthenticated=true
+//   - logout()：isAuthenticated=false（保留 currentUserId 不重要）
+//   - isAuthenticated()：判斷要不要顯示 LoginCard
+//
+// 密碼放 permissions.ts 的 USER_PASSWORDS 常數；未來接真登入時，把整段
+// 換成呼叫後端 API。
+// ─────────────────────────────────────────────────────────────
+
+import { verifyUserPassword } from './permissions'
+
+/**
+ * 嘗試登入。
+ *
+ * @returns true = 密碼正確，已切到該 user 並標記為已登入；
+ *          false = 密碼錯誤，狀態不變。
+ */
+export function login(userId: string, password: string): boolean {
+  // 動態 require 避免循環 import 問題（permissions.ts 已在檔內 import）
+  if (!verifyUserPassword(userId, password)) return false
+  storeSetCurrentUserId(userId)
+  storeSetIsAuthenticated(true)
+  return true
+}
+
+/** 登出 — 標記為未登入，回到 LoginCard */
+export function logout(): void {
+  storeSetIsAuthenticated(false)
+}
+
+/** 是否已通過登入驗證 — ChromeShell 用此判斷要不要擋下 LoginCard */
+export function isAuthenticated(): boolean {
+  return storeGetIsAuthenticated()
 }
 
 

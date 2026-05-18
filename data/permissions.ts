@@ -144,6 +144,31 @@ export const REAL_USER_ID = 'u1'
 
 
 // ============================================================
+// 5.5. Demo 密碼（階段 14 — 仿真登入體驗）
+// ============================================================
+// 每個 demo 使用者的登入密碼。未來接真登入時，這層整個拿掉，
+// 改成由後端 verify。
+//
+// 預設全部 0000 — 老闆要的「示範時的儀式感」夠用就好；
+// 想為單一角色換密碼，這裡改字串即可。
+// ============================================================
+
+export const USER_PASSWORDS: Readonly<Record<string, string>> = {
+  u1: '0000', // 王家凱 — owner
+  u2: '0000', // 王館主 — manager 飛翼
+  u3: '0000', // 李小芳 — manager 球魔方 2.0
+  u4: '0000', // 工讀生小明 — staff 飛翼
+}
+
+/** 驗證 user + password 組合是否正確。未知 userId 一律 false。 */
+export function verifyUserPassword(userId: string, password: string): boolean {
+  const expected = USER_PASSWORDS[userId]
+  if (expected === undefined) return false
+  return expected === password
+}
+
+
+// ============================================================
 // 6. 純函數 helpers
 // ============================================================
 

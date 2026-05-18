@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { usePathname } from 'next/navigation'
 import {
   getCurrentUser, getEffectiveRole, getUserRoleLabel,
-  listAccessiblePages, listAllUsers, switchCurrentUser,
+  listAccessiblePages, listAllUsers, login as apiLogin, logout as apiLogout,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import type { PageKey } from '@/data/permissions'
@@ -60,6 +60,11 @@ export default function Sidebar() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const pathname = usePathname()
 
+  // 階段 14：切換身份的密碼 modal 狀態
+  const [switchTargetId, setSwitchTargetId] = useState<string | null>(null)
+  const [switchPassword, setSwitchPassword] = useState('')
+  const [switchError, setSwitchError] = useState('')
+
   // 訂閱 store 變更（切視角 / mutation 都會 trigger re-render）
   useStoreSync()
 
@@ -80,6 +85,50 @@ export default function Sidebar() {
     : new Set(ALL_LINKS.map(l => l.pageKey))
 
   const visibleLinks = ALL_LINKS.filter(l => accessibleSet.has(l.pageKey))
+
+  // 階段 14：點選 dropdown 中其他使用者 → 開密碼 modal
+  const requestSwitch = (userId: string) => {
+    if (userId === currentUser?.id) {
+      setPickerOpen(false)
+      return
+    }
+    setSwitchTargetId(userId)
+    setSwitchPassword('')
+    setSwitchError('')
+    setPickerOpen(false)
+  }
+
+  const confirmSwitch = () => {
+    if (!switchTargetId) return
+    if (!switchPassword) {
+      setSwitchError('請輸入密碼')
+      return
+    }
+    const ok = apiLogin(switchTargetId, switchPassword)
+    if (!ok) {
+      setSwitchError('密碼錯誤')
+      setSwitchPassword('')
+      return
+    }
+    // 成功
+    setSwitchTargetId(null)
+    setSwitchPassword('')
+    setSwitchError('')
+  }
+
+  const cancelSwitch = () => {
+    setSwitchTargetId(null)
+    setSwitchPassword('')
+    setSwitchError('')
+  }
+
+  const onLogout = () => {
+    apiLogout()
+    // LoginGate 會自動 re-render 出 LoginCard
+  }
+
+  const switchTargetUser = switchTargetId ? allUsers.find(u => u.id === switchTargetId) : null
+  const switchTargetLabel = switchTargetId && mounted ? getUserRoleLabel(switchTargetId) : ''
 
   const NavContent = () => (
     <div style={{ flex: 1, overflowY: 'auto' }}>
@@ -159,7 +208,7 @@ export default function Sidebar() {
                 const active = currentUser?.id === u.id
                 return (
                   <button key={u.id}
-                    onClick={() => { switchCurrentUser(u.id); setPickerOpen(false) }}
+                    onClick={() => requestSwitch(u.id)}
                     style={{
                       width: '100%', textAlign: 'left',
                       padding: '10px 12px', border: 'none', cursor: 'pointer',
@@ -177,6 +226,18 @@ export default function Sidebar() {
                   </button>
                 )
               })}
+              <div style={{ borderTop: '1px solid #444' }}>
+                <button
+                  onClick={() => { setPickerOpen(false); onLogout() }}
+                  style={{
+                    width: '100%', textAlign: 'left',
+                    padding: '10px 12px', border: 'none', cursor: 'pointer',
+                    background: 'transparent', color: '#e85d3a',
+                    fontSize: 12, display: 'flex', alignItems: 'center', gap: 6,
+                  }}>
+                  <span>↩</span><span>登出</span>
+                </button>
+              </div>
             </div>
           )}
 
@@ -228,6 +289,91 @@ export default function Sidebar() {
           #mobile-topbar { display: flex !important; }
         }
       `}</style>
+
+      {/* 階段 14：切換身份的密碼 modal */}
+      {switchTargetId && switchTargetUser && (
+        <div
+          onClick={cancelSwitch}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 200,
+            background: 'rgba(0,0,0,0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 20,
+          }}>
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#fff', borderRadius: 14,
+              padding: '24px 22px', width: '100%', maxWidth: 340,
+              boxShadow: '0 12px 40px rgba(0,0,0,0.3)',
+            }}>
+            <div style={{ textAlign: 'center', marginBottom: 18 }}>
+              <div style={{ fontSize: 28, marginBottom: 6 }}>🔐</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: '#1a1917' }}>
+                切換到 {switchTargetUser.name}
+              </div>
+              <div style={{ fontSize: 12, color: roleColor(switchTargetUser.id), marginTop: 4, fontWeight: 500 }}>
+                {switchTargetLabel}
+              </div>
+            </div>
+
+            <div style={{ fontSize: 12, color: '#666', marginBottom: 6, fontWeight: 500 }}>
+              密碼
+            </div>
+            <input
+              type="password"
+              value={switchPassword}
+              onChange={e => { setSwitchPassword(e.target.value); setSwitchError('') }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') confirmSwitch()
+                if (e.key === 'Escape') cancelSwitch()
+              }}
+              placeholder="輸入 4 位數密碼"
+              autoFocus
+              style={{
+                width: '100%', boxSizing: 'border-box',
+                padding: '11px 14px', borderRadius: 10,
+                border: switchError ? '1px solid #dc2626' : '1px solid #e8e6e0',
+                fontSize: 15, outline: 'none',
+                marginBottom: switchError ? 6 : 14,
+              }}
+            />
+
+            {switchError && (
+              <div style={{ fontSize: 12, color: '#dc2626', marginBottom: 14 }}>
+                ⚠ {switchError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={cancelSwitch}
+                style={{
+                  flex: 1, padding: '11px 14px',
+                  background: '#fff', color: '#666',
+                  border: '1px solid #e8e6e0', borderRadius: 10,
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}>
+                取消
+              </button>
+              <button
+                onClick={confirmSwitch}
+                style={{
+                  flex: 1, padding: '11px 14px',
+                  background: '#1a1917', color: '#fff',
+                  border: 'none', borderRadius: 10,
+                  fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}>
+                確認切換
+              </button>
+            </div>
+
+            <div style={{ marginTop: 14, fontSize: 11, color: '#aaa', textAlign: 'center' }}>
+              💡 Demo 預設密碼皆為 0000
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }

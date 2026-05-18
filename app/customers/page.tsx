@@ -44,25 +44,51 @@ export default function CustomersPage() {
   const [mounted, setMounted] = useState(false)
   useEffect(() => { setMounted(true) }, [])
 
+  // 使用者選擇的篩選條件
+  const [selectedLevel, setSelectedLevel] = useState<string>('all')
+  const [searchQuery, setSearchQuery] = useState<string>('')
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
 
   // 客戶本身沒綁館 — 過濾條件：有 registration 在 visible venue 的 session
   const customers = useMemo(() => {
     const all = listCustomers()
-    if (visible === 'all') return all
-    const visibleSessionIds = new Set(
-      listSessions()
-        .filter(s => visible.includes(s.venueId))
-        .map(s => s.id),
-    )
-    const visibleCustomerIds = new Set(
-      listRegistrations()
-        .filter(r => visibleSessionIds.has(r.sessionId))
-        .map(r => r.customerId),
-    )
-    return all.filter(c => visibleCustomerIds.has(c.id))
-  }, [visible])
+
+    // (1) 角色可見範圍
+    let result: typeof all
+    if (visible === 'all') {
+      result = all
+    } else {
+      const visibleSessionIds = new Set(
+        listSessions()
+          .filter(s => visible.includes(s.venueId))
+          .map(s => s.id),
+      )
+      const visibleCustomerIds = new Set(
+        listRegistrations()
+          .filter(r => visibleSessionIds.has(r.sessionId))
+          .map(r => r.customerId),
+      )
+      result = all.filter(c => visibleCustomerIds.has(c.id))
+    }
+
+    // (2) 程度篩選（精確比對）
+    if (selectedLevel !== 'all') {
+      result = result.filter(c => c.skillLevel === selectedLevel)
+    }
+
+    // (3) 搜尋（姓名 / 電話 — 任一命中即可）
+    const q = searchQuery.trim().toLowerCase()
+    if (q) {
+      result = result.filter(c =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone ?? '').toLowerCase().includes(q),
+      )
+    }
+
+    return result
+  }, [visible, selectedLevel, searchQuery])
 
   const stats = useMemo(() => {
     const allRegs = listRegistrations()
@@ -95,10 +121,19 @@ export default function CustomersPage() {
             <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>共 {customers.length} 位客戶</p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <input placeholder="搜尋姓名或電話..." style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', fontSize: 13, width: 200, outline: 'none' }} />
-            <select style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}>
-              <option>所有程度</option>
-              {['S','A','B+','B','B-','C','D','E'].map(l => <option key={l}>{l}</option>)}
+            <input
+              placeholder="搜尋姓名或電話..."
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', fontSize: 13, width: 200, outline: 'none' }}
+            />
+            <select
+              value={selectedLevel}
+              onChange={e => setSelectedLevel(e.target.value)}
+              style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid #e8e6e0', background: '#fff', fontSize: 13 }}
+            >
+              <option value="all">所有程度</option>
+              {['S*','S','A+','A','B+','B','B-','C','D','E'].map(l => <option key={l} value={l}>{l}</option>)}
             </select>
           </div>
         </div>

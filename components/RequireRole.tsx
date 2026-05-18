@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   getCurrentUser, getEffectiveRole, getPageAccess,
-  isImpersonating, returnToRealUser,
+  logout as apiLogout,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import { EFFECTIVE_ROLE_LABEL, PAGE_LABEL, type PageKey } from '@/data/permissions'
@@ -88,12 +88,11 @@ interface DeniedCardProps {
 }
 
 function DeniedCard({ page, reason, onSessions }: DeniedCardProps) {
-  const impersonating = isImpersonating()
   const user = getCurrentUser()
   const role = user ? getEffectiveRole(user.id) : 'none'
 
-  const onReturnOwner = () => {
-    returnToRealUser()
+  const onLogoutClick = () => {
+    apiLogout()
   }
 
   return (
@@ -148,23 +147,21 @@ function DeniedCard({ page, reason, onSessions }: DeniedCardProps) {
             </button>
           )}
 
-          {impersonating && (
-            <button
-              onClick={onReturnOwner}
-              style={{
-                background: '#fff',
-                color: '#5c4a1a',
-                border: '1px solid #d4a843',
-                padding: '10px 16px',
-                borderRadius: 6,
-                fontSize: 14,
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              ⬆ 回到 owner 視角
-            </button>
-          )}
+          <button
+            onClick={onLogoutClick}
+            style={{
+              background: '#fff',
+              color: '#5c4a1a',
+              border: '1px solid #d4a843',
+              padding: '10px 16px',
+              borderRadius: 6,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            ↩ 登出，切換其他帳號
+          </button>
         </div>
       </div>
     </div>

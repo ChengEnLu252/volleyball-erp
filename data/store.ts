@@ -126,6 +126,14 @@ interface PersistedDiff {
   auditLogs: AuditLog[]
   /** 目前登入的 User.id（u1-u4），預設 u1 王家凱 */
   currentUserId: string
+  /**
+   * 階段 14 加：是否已通過登入驗證。
+   * 預設 false → 首次進入會顯示 LoginCard。
+   * 登入後 true 並 persist；按「登出」改回 false。
+   *
+   * 注意：currentUserId 永遠有值（預設 u1），不能用「currentUserId 是否存在」判斷登入狀態。
+   */
+  isAuthenticated: boolean
 
   // ── 階段 5（原 store-stage5）────────────────────────
   /**
@@ -193,6 +201,7 @@ function emptyDiff(): PersistedDiff {
     seasonRentalsPatches: {},
     auditLogs: [],
     currentUserId: 'u1',
+    isAuthenticated: false,
     registrationSelfReportPatches: {},
     productTransactionsAdded: [],
     transfersAdded: [],
@@ -461,6 +470,7 @@ export function hydrateStore(): void {
       seasonRentalsPatches:  mainParsed?.seasonRentalsPatches  ?? {},
       auditLogs:             mainParsed?.auditLogs             ?? [],
       currentUserId:         mainParsed?.currentUserId         ?? 'u1',
+      isAuthenticated:       mainParsed?.isAuthenticated        ?? false,
       // 階段 5 欄位：優先讀主 key、退回 legacy key
       registrationSelfReportPatches:
         mainParsed?.registrationSelfReportPatches
@@ -636,6 +646,13 @@ export function appendAuditLog(log: AuditLog): void {
 
 export function setCurrentUserId(userId: string): void {
   diff.currentUserId = userId
+  persist()
+  notify()
+}
+
+/** 階段 14：標記登入狀態（true=已通過驗證，false=登出回登入頁） */
+export function setIsAuthenticated(value: boolean): void {
+  diff.isAuthenticated = value
   persist()
   notify()
 }
@@ -836,6 +853,11 @@ export function getAuditLogs(): AuditLog[] {
 
 export function getCurrentUserId(): string {
   return diff.currentUserId
+}
+
+/** 階段 14：目前是否通過登入驗證 */
+export function getIsAuthenticated(): boolean {
+  return diff.isAuthenticated
 }
 
 /**
