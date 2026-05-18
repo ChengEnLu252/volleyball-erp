@@ -9,7 +9,8 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="zh-TW">
-      <body style={{ margin: 0, background: '#f5f4f0', fontFamily: 'system-ui, sans-serif' }}>
+      {/* body 樣式（背景 / 字體）改由 globals.css 統一管理，這裡保持乾淨 */}
+      <body>
         <ChromeShell>{children}</ChromeShell>
       </body>
     </html>

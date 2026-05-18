@@ -1,5 +1,13 @@
 'use client'
 
+// ============================================================
+// app/dashboard/page.tsx — Dashboard + 視覺改版
+// ============================================================
+// 業務邏輯 100% 保留（mount 後過濾、delta 計算、AI insights、
+// venue filter、unpaid 名單、alerts、所有條件 render）。
+// 僅前端視覺重寫 + 新增 Volli 提醒框（用既有 alerts 資料）。
+// ============================================================
+
 import { useEffect, useState } from 'react'
 import {
   getAiInsights, getCurrentVisibleVenueIds,
@@ -8,164 +16,467 @@ import {
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import AiSection from '@/components/AiSection'
+import QiuQiu from '@/components/QiuQiu'
+import { COLORS, FONTS, VENUE_COLOR } from '@/components/theme/tokens'
 import type { DashboardData } from '@/types'
 
 export default function DashboardPage() {
   useStoreSync()
 
-  // SSR-safe mount flag — server render 用全館 owner 視角；
-  // client mount 後才會根據 currentUser 過濾
   const [mounted, setMounted] = useState(false)
   useEffect(() => {
     hydrateStore()
     setMounted(true)
   }, [])
 
-  // 依目前 user 的可見 venue 集合決定資料
   const visible = mounted ? getCurrentVisibleVenueIds() : 'all'
 
   const data: DashboardData    = getFilteredDashboard(visible)
   const stats: DashboardStats  = getFilteredDashboardStats(visible)
   const insights               = getAiInsights()
 
-  // 「↑ 較昨日 +X.X%」/「↓ 較昨日 -X.X%」
   const delta = stats.revenueDelta.deltaPercent
   const deltaSign = delta > 0 ? '↑' : delta < 0 ? '↓' : '→'
   const deltaSub  = stats.revenueDelta.prev === 0
     ? '昨日無營收資料'
     : `${deltaSign} 較昨日 ${delta > 0 ? '+' : ''}${delta}%`
+  const deltaColor = delta > 0 ? COLORS.success : delta < 0 ? COLORS.danger : COLORS.ink500
 
-  // 視角 label — 給 dashboard title 用（manager 視角顯示「飛翼館今日總覽」）
   const titleSuffix = visible === 'all' || visible.length !== 1
     ? '今日總覽'
     : `${data.venues[0]?.venueName ?? ''} 今日總覽`
 
+  // 給標題的日期字串（給 chrome bracket 用）
+  const todayLabel = new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit' }).replace(/\//g, '.')
+  const weekdayShort = ['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date().getDay()]
+
   return (
-    <div style={{ padding: '16px' }}>
+    <div style={{ padding: '16px', fontFamily: FONTS.sans, position: 'relative' }}>
       <style>{`
         @media (max-width: 768px) {
           .dash-wrap { padding-top: 64px !important; }
           .stats-grid { grid-template-columns: repeat(2, 1fr) !important; }
           .main-grid  { grid-template-columns: 1fr !important; }
           .unpaid-grid{ grid-template-columns: 1fr !important; }
+          .dash-hero-volli { display: none !important; }
         }
       `}</style>
 
-      <div className="dash-wrap" style={{ paddingTop: 0 }}>
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 600, margin: 0 }}>{titleSuffix}</h1>
-          <p style={{ fontSize: 13, color: '#888', margin: '4px 0 0' }}>
+      <div className="dash-wrap" style={{ paddingTop: 0, position: 'relative' }}>
+
+        {/* —— 標題區 + 球球 hero —— */}
+        <div style={{
+          marginBottom: 18,
+          position: 'relative',
+          paddingRight: 130,
+        }}>
+          <div className="vop-mono" style={{
+            display: 'inline-block',
+            fontSize: 10, fontWeight: 800,
+            color: COLORS.pink700,
+            letterSpacing: '0.16em',
+            padding: '3px 10px',
+            background: COLORS.pink100,
+            border: `1px solid ${COLORS.pink300}`,
+            borderRadius: 99,
+            marginBottom: 8,
+          }}>
+            [ {todayLabel} · {weekdayShort} ]
+          </div>
+          <h1 style={{
+            fontSize: 24, fontWeight: 800, margin: 0,
+            letterSpacing: '-0.025em', lineHeight: 1.2,
+            color: COLORS.ink900,
+          }}>
+            {titleSuffix}{' '}
+            <span style={{
+              color: COLORS.pink500,
+              textShadow: '0 0 18px rgba(255,45,138,0.35)',
+              fontFamily: FONTS.mono,
+              fontSize: 22,
+            }}>
+              / DASHBOARD ⚡
+            </span>
+          </h1>
+          <p style={{
+            fontSize: 13, color: COLORS.ink500, margin: '6px 0 0',
+            lineHeight: 1.5,
+          }}>
             {new Date().toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
+            {stats.totalSessions > 0 && (
+              <> · 今日有 <span style={{ color: COLORS.pink500, fontWeight: 700 }}>{stats.totalSessions} 場</span> 進行中，球球已就位 ✦</>
+            )}
           </p>
+
+          {/* 球球 hero — 桌機才顯示 */}
+          <div className="dash-hero-volli" style={{
+            position: 'absolute', top: -4, right: 0,
+            pointerEvents: 'none',
+          }}>
+            <QiuQiu variant="full" size={108} rotate={-6} bob />
+          </div>
         </div>
 
-        <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 16 }}>
-          <StatCard label="今日總收入"   value={`$${stats.totalRevenue.toLocaleString()}`} sub={deltaSub}                          accent="#d4a843" />
-          <StatCard label="今日出席人次" value={`${stats.totalPlayers} 人`}                sub={`滿場率 ${stats.fillRate}%`}        accent="#2563eb" />
-          <StatCard label="進行中場次"   value={`${stats.totalSessions} 場`}               sub={`共 ${stats.activeVenueCount} 館`}  accent="#059669" />
-          <StatCard label="未付款人數"   value={`${stats.totalUnpaid} 人`}                 sub={`待收 $${stats.totalUnpaidAmount.toLocaleString()}`} accent="#e85d3a" />
+        {/* —— 4 張統計卡（HUD 樣式）—— */}
+        <div className="stats-grid" style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(4, 1fr)',
+          gap: 10, marginBottom: 14,
+        }}>
+          <StatCard
+            label="今日總收入"
+            shortLabel="REVENUE"
+            value={`$${stats.totalRevenue.toLocaleString()}`}
+            sub={deltaSub}
+            subColor={deltaColor}
+            accent={COLORS.pink500}
+          />
+          <StatCard
+            label="今日出席人次"
+            shortLabel="PLAYERS"
+            value={`${stats.totalPlayers}`}
+            valueSuffix=" 人"
+            sub={`滿場率 ${stats.fillRate}%`}
+            accent={COLORS.purple}
+          />
+          <StatCard
+            label="進行中場次"
+            shortLabel="LIVE"
+            value={`${String(stats.totalSessions).padStart(2, '0')}`}
+            valueSuffix=" 場"
+            sub={`共 ${stats.activeVenueCount} 館`}
+            accent={COLORS.cyan}
+            live
+          />
+          <StatCard
+            label="未付款人數"
+            shortLabel="UNPAID"
+            value={`${stats.totalUnpaid}`}
+            valueSuffix=" 人"
+            sub={`待收 $${stats.totalUnpaidAmount.toLocaleString()}`}
+            accent={COLORS.amber}
+          />
         </div>
 
-        <div className="main-grid" style={{ display: 'grid', gridTemplateColumns: '1.1fr 0.9fr', gap: 12, marginBottom: 12 }}>
-          <Panel title={visible === 'all' ? '各館即時狀況' : '本館即時狀況'}>
+        {/* —— 各館即時 + 異常通知 —— */}
+        <div className="main-grid" style={{
+          display: 'grid',
+          gridTemplateColumns: '1.1fr 0.9fr',
+          gap: 10, marginBottom: 10,
+        }}>
+          <Panel
+            title={visible === 'all' ? '各館即時狀況' : '本館即時狀況'}
+            liveIndicator
+          >
             {data.venues.map(venue => (
               <div key={venue.venueId} style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                padding: '10px 0', borderBottom: '1px solid #f0ede6', flexWrap: 'wrap',
+                padding: '9px 0',
+                borderBottom: `1px dashed ${COLORS.borderLight}`,
+                flexWrap: 'wrap',
               }}>
-                <div style={{ width: 10, height: 10, borderRadius: '50%', background: VENUE_COLOR[venue.venueId], flexShrink: 0 }} />
-                <div style={{ flex: 1, fontWeight: 500, fontSize: 13, minWidth: 50 }}>{venue.venueName}</div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>${venue.totalRevenue.toLocaleString()}</div>
-                <div style={{ fontSize: 12, color: '#888' }}>{venue.totalPlayers} 人</div>
+                <div style={{
+                  width: 9, height: 9, borderRadius: 2,
+                  background: VENUE_COLOR[venue.venueId] ?? COLORS.pink400,
+                  boxShadow: `0 0 6px ${VENUE_COLOR[venue.venueId] ?? COLORS.pink400}80`,
+                  flexShrink: 0,
+                }} />
+                <div style={{ flex: 1, fontWeight: 700, fontSize: 13, minWidth: 50, color: COLORS.ink900 }}>
+                  {venue.venueName}
+                </div>
+                <div className="vop-mono" style={{ fontSize: 13, fontWeight: 800, color: COLORS.ink900 }}>
+                  ${venue.totalRevenue.toLocaleString()}
+                </div>
+                <div className="vop-mono" style={{ fontSize: 11, color: COLORS.ink500 }}>
+                  {venue.totalPlayers} 人
+                </div>
                 {venue.unpaidCount > 0 && (
-                  <span style={{ fontSize: 11, background: '#fff3cd', color: '#856404', padding: '2px 7px', borderRadius: 8 }}>未付 {venue.unpaidCount}</span>
+                  <span className="vop-mono" style={{
+                    fontSize: 10,
+                    background: COLORS.warnBg, color: COLORS.warn,
+                    padding: '2px 8px', borderRadius: 99,
+                    fontWeight: 700,
+                    border: `1px solid ${COLORS.warnBorder}`,
+                  }}>
+                    ⚠ 未付 {venue.unpaidCount}
+                  </span>
                 )}
                 {venue.giftRatio > 30 && (
-                  <span style={{ fontSize: 11, background: '#fce7f3', color: '#9d174d', padding: '2px 7px', borderRadius: 8 }}>⚠ 贈送偏高</span>
+                  <span className="vop-mono" style={{
+                    fontSize: 10,
+                    background: COLORS.dangerBg, color: COLORS.danger,
+                    padding: '2px 8px', borderRadius: 99,
+                    fontWeight: 700,
+                    border: `1px solid ${COLORS.pink300}`,
+                  }}>
+                    ⚠ 贈送偏高
+                  </span>
                 )}
               </div>
             ))}
             {data.venues.length === 0 && (
-              <div style={{ padding: 20, textAlign: 'center', color: '#888', fontSize: 13 }}>
-                您的館今日無資料
-              </div>
+              <EmptyState text="您的館今日無資料" />
             )}
           </Panel>
 
-          <Panel title={`異常通知 (${data.alerts.length})`}>
-            {data.alerts.map(alert => (
-              <div key={alert.id} style={{ padding: '9px 0', borderBottom: '1px solid #f0ede6' }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#e85d3a', marginBottom: 2 }}>{alert.venueName}</div>
-                <div style={{ fontSize: 12, color: '#555', lineHeight: 1.5 }}>{alert.message}</div>
+          <Panel
+            title="異常通知"
+            badge={data.alerts.length}
+          >
+            {data.alerts.map((alert, idx) => (
+              <div key={alert.id} style={{
+                padding: '8px 0',
+                borderBottom: idx < data.alerts.length - 1 ? `1px dashed ${COLORS.borderLight}` : 'none',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3 }}>
+                  <span className="vop-mono" style={{
+                    fontSize: 9, fontWeight: 800, color: COLORS.pink500,
+                  }}>
+                    #{String(idx + 1).padStart(3, '0')}
+                  </span>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: COLORS.pink700 }}>
+                    {alert.venueName}
+                  </span>
+                </div>
+                <div style={{ fontSize: 12, color: COLORS.ink700, lineHeight: 1.5 }}>
+                  {alert.message}
+                </div>
               </div>
             ))}
             {data.alerts.length === 0 && (
-              <div style={{ padding: 12, textAlign: 'center', color: '#888', fontSize: 12 }}>無異常</div>
+              <EmptyState text="無異常 · 球球幫你顧好了" showMascot />
             )}
           </Panel>
         </div>
 
+        {/* —— 未付款名單 —— */}
         <Panel title={`未付款名單（待收 $${stats.totalUnpaidAmount.toLocaleString()}）`}>
-          <div className="unpaid-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+          <div className="unpaid-grid" style={{
+            display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8,
+          }}>
             {data.unpaidRegistrations.map(r => (
               <div key={r.registrationId} style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                padding: '8px 12px', background: '#fafaf8', borderRadius: 8, border: '1px solid #f0ede6',
+                padding: '9px 12px',
+                background: COLORS.pink50,
+                borderRadius: 9,
+                border: `1px solid ${COLORS.pink100}`,
               }}>
                 <div style={{
-                  width: 32, height: 32, borderRadius: 8, background: '#e8e6ff',
+                  width: 34, height: 34, borderRadius: 9,
+                  background: `linear-gradient(135deg, ${COLORS.pink400} 0%, ${COLORS.pink500} 100%)`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 13, fontWeight: 600, color: '#5b4fd8', flexShrink: 0,
+                  fontSize: 14, fontWeight: 800, color: '#fff',
+                  flexShrink: 0,
+                  boxShadow: '0 2px 8px -2px rgba(255,45,138,0.4)',
                 }}>
                   {r.customerName[0]}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>{r.customerName}</div>
-                  <div style={{ fontSize: 11, color: '#888' }}>{r.venueName} · {r.sessionTime}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.ink900 }}>
+                    {r.customerName}
+                  </div>
+                  <div className="vop-mono" style={{ fontSize: 10.5, color: COLORS.ink500, marginTop: 1 }}>
+                    {r.venueName} · {r.sessionTime}
+                  </div>
                 </div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: r.waitedMinutes > 120 ? '#e85d3a' : '#1a1917', flexShrink: 0 }}>
+                <div className="vop-mono" style={{
+                  fontSize: 14, fontWeight: 800,
+                  color: r.waitedMinutes > 120 ? COLORS.pink500 : COLORS.ink900,
+                  flexShrink: 0,
+                }}>
                   ${r.amount}
                 </div>
               </div>
             ))}
             {data.unpaidRegistrations.length === 0 && (
-              <div style={{ padding: 12, textAlign: 'center', color: '#888', fontSize: 13, gridColumn: '1 / -1' }}>無未付款</div>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <EmptyState text="無未付款 · 收得乾淨溜溜" showMascot />
+              </div>
             )}
           </div>
         </Panel>
 
-        {/* AI 洞察 — 全館視角才顯示（manager 看到的洞察與自己館無關時混淆）*/}
+        {/* AI 洞察 — 全館視角才顯示（原邏輯保留）*/}
         {visible === 'all' && <AiSection insights={insights} />}
       </div>
     </div>
   )
 }
 
-function StatCard({ label, value, sub, accent }: { label: string, value: string, sub: string, accent: string }) {
+
+// ============================================================
+// StatCard — 帶 HUD 角落 + accent 燈光
+// ============================================================
+function StatCard({
+  label, shortLabel, value, valueSuffix, sub, subColor, accent, live,
+}: {
+  label: string
+  shortLabel: string
+  value: string
+  valueSuffix?: string
+  sub: string
+  subColor?: string
+  accent: string
+  live?: boolean
+}) {
+  // 轉淡色用於 corner 光暈
   return (
-    <div style={{ background: '#fff', borderRadius: 12, padding: '14px 16px', border: '1px solid #e8e6e0', position: 'relative', overflow: 'hidden' }}>
-      <div style={{ fontSize: 11, color: '#888', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-1px', lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>{sub}</div>
-      <div style={{ position: 'absolute', top: 14, right: 14, width: 4, height: 32, borderRadius: 2, background: accent }} />
+    <div style={{
+      background: '#fff',
+      borderRadius: 12,
+      border: `1px solid ${COLORS.border}`,
+      padding: '12px 14px',
+      position: 'relative',
+      overflow: 'visible',
+    }}>
+      {/* 4 個 HUD 角 */}
+      <span style={{ position:'absolute', top:-1, left:-1, width:7, height:7, borderTop:`1.5px solid ${accent}`, borderLeft:`1.5px solid ${accent}` }} />
+      <span style={{ position:'absolute', top:-1, right:-1, width:7, height:7, borderTop:`1.5px solid ${accent}`, borderRight:`1.5px solid ${accent}` }} />
+      <span style={{ position:'absolute', bottom:-1, left:-1, width:7, height:7, borderBottom:`1.5px solid ${accent}`, borderLeft:`1.5px solid ${accent}` }} />
+      <span style={{ position:'absolute', bottom:-1, right:-1, width:7, height:7, borderBottom:`1.5px solid ${accent}`, borderRight:`1.5px solid ${accent}` }} />
+
+      {/* 右上 corner 光 */}
+      <div style={{
+        position: 'absolute', top: 0, right: 0,
+        width: 40, height: 40,
+        background: `linear-gradient(135deg, ${accent} 0%, transparent 70%)`,
+        borderRadius: '0 12px 0 40px',
+        opacity: 0.14,
+        pointerEvents: 'none',
+      }} />
+
+      <div className="vop-mono" style={{
+        fontSize: 9, color: accent,
+        fontWeight: 800, letterSpacing: '0.12em',
+        marginBottom: 6,
+      }}>
+        // {shortLabel}
+      </div>
+      <div className="vop-mono" style={{
+        fontSize: 22, fontWeight: 800,
+        color: COLORS.ink900,
+        letterSpacing: '-0.04em', lineHeight: 1,
+      }}>
+        {value}
+        {valueSuffix && (
+          <span style={{ fontSize: 13, color: COLORS.ink300, fontWeight: 600 }}>
+            {valueSuffix}
+          </span>
+        )}
+      </div>
+      <div style={{
+        fontSize: 11, color: subColor ?? COLORS.ink500,
+        marginTop: 5, fontWeight: 600,
+        display: 'flex', alignItems: 'center', gap: 5,
+      }}>
+        {live && (
+          <span
+            className="vop-ping"
+            style={{
+              width: 5, height: 5, borderRadius: '50%',
+              background: accent,
+              display: 'inline-block',
+              boxShadow: `0 0 6px ${accent}`,
+            }}
+          />
+        )}
+        <span>{sub}</span>
+      </div>
+
+      {/* 原本的 accent 條（保留語意，比較細）*/}
+      <div style={{
+        position: 'absolute', top: 12, right: 12,
+        width: 3, height: 26, borderRadius: 2, background: accent,
+        boxShadow: `0 0 6px ${accent}80`,
+      }} />
     </div>
   )
 }
 
-function Panel({ title, children }: { title: string, children: React.ReactNode }) {
+
+// ============================================================
+// Panel — 帶 bracket title + live indicator + badge
+// ============================================================
+function Panel({
+  title, children, liveIndicator, badge,
+}: {
+  title: string
+  children: React.ReactNode
+  liveIndicator?: boolean
+  badge?: number
+}) {
   return (
-    <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0', overflow: 'hidden', marginBottom: 12 }}>
-      <div style={{ padding: '13px 16px', borderBottom: '1px solid #f0ede6', fontSize: 13, fontWeight: 600 }}>{title}</div>
-      <div style={{ padding: '4px 16px 12px' }}>{children}</div>
+    <div style={{
+      background: '#fff',
+      borderRadius: 12,
+      border: `1px solid ${COLORS.border}`,
+      overflow: 'hidden',
+      marginBottom: 10,
+      boxShadow: '0 2px 8px -3px rgba(255,45,138,0.08)',
+    }}>
+      <div style={{
+        padding: '11px 14px',
+        borderBottom: `1px solid ${COLORS.pink100}`,
+        background: `linear-gradient(90deg, ${COLORS.pink50} 0%, #fff 80%)`,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="vop-mono" style={{ fontSize: 10, color: COLORS.pink500, fontWeight: 800 }}>[</span>
+          <div style={{ fontSize: 13, fontWeight: 800, color: COLORS.ink900, letterSpacing: '-0.01em' }}>
+            {title}
+          </div>
+          <span className="vop-mono" style={{ fontSize: 10, color: COLORS.pink500, fontWeight: 800 }}>]</span>
+        </div>
+        {liveIndicator && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span
+              className="vop-ping"
+              style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: COLORS.pink500, display: 'inline-block',
+                boxShadow: `0 0 8px ${COLORS.pink500}`,
+              }}
+            />
+            <span className="vop-mono" style={{
+              fontSize: 10, fontWeight: 800,
+              color: COLORS.pink500,
+              letterSpacing: '0.1em',
+            }}>LIVE</span>
+          </div>
+        )}
+        {typeof badge === 'number' && (
+          <span className="vop-mono" style={{
+            fontSize: 10,
+            background: `linear-gradient(90deg, ${COLORS.pink500}, ${COLORS.pink400})`,
+            color: '#fff',
+            padding: '2px 9px', borderRadius: 99, fontWeight: 800,
+            boxShadow: `0 0 8px rgba(255,45,138,0.45)`,
+          }}>
+            {String(badge).padStart(2, '0')}
+          </span>
+        )}
+      </div>
+      <div style={{ padding: '6px 14px 12px' }}>
+        {children}
+      </div>
     </div>
   )
 }
 
-const VENUE_COLOR: Record<string, string> = {
-  v1: '#7c6af7',
-  v2: '#0ea5e9',
-  v3: '#f59e0b',
-  v4: '#10b981',
-  v5: '#f43f5e',
-  v6: '#06b6d4',
+
+// ============================================================
+// EmptyState — 球球 + 文字
+// ============================================================
+function EmptyState({ text, showMascot }: { text: string; showMascot?: boolean }) {
+  return (
+    <div style={{
+      padding: '18px 12px', textAlign: 'center',
+      color: COLORS.ink500, fontSize: 13,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8,
+    }}>
+      {showMascot && <QiuQiu variant="face" size={44} opacity={0.7} />}
+      <span>{text}</span>
+    </div>
+  )
 }
