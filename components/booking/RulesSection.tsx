@@ -50,7 +50,7 @@ export default function RulesSection({ venueInfo, venueSlug, defaultOpenIndex }:
     { emoji: '🏐', title: '取消報名以及候補補位機制', content: <CancelPolicy /> },
     { emoji: '🏐', title: '包場價格及流程', content: <RentalInfo venueSlug={venueSlug} /> },
     { emoji: '🏐', title: '公務損壞之賠償', content: <DamageCompensation /> },
-    { emoji: '🏐', title: '車輛停放規定', content: <ParkingRules /> },
+    { emoji: '🏐', title: '車輛停放規定', content: <ParkingRules venueSlug={venueSlug} /> },
   ]
 
   return (

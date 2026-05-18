@@ -1,13 +1,15 @@
 // ============================================================
 // components/booking/rules-content.tsx — 規則區六章文字模組
 // ============================================================
-// 階段 13 新增。
+// 階段 13 新增，階段 13.1 更新。
 //
-// 重要：館主決定 7 個館共用「飛翼」這套規則文字。文字內容直接照舊飛翼系統
-// 的截圖文案。若未來各館需要個別客製，可改成 record-by-slug 結構。
+// 規則 1～5（球場守則 / 報名須知 / 取消候補 / 包場 / 公務損壞）：7 館共用。
+// 規則 6（車輛停放規定）：依 venueSlug 分流（飛翼 SVG / Ace 2.0、3.0 純文字 /
+//   就醬瘋、Hibi、play one 圖片 / 球魔方 2.0 開幕中）。
 //
 // 設計：純文字模組（每章一個 React node），由 RulesSection 渲染。
-// 文字內容不含 LINE 連結（連結由 RulesSection 從 venueInfo 注入）。
+// 文字內容不含 LINE / IG 連結（連結由 RulesSection 從 venueInfo 注入到
+// RegistrationNotice）。
 // ============================================================
 
 import { BOOKING_COLORS, BOOKING_FONTS, BOOKING_RADIUS } from './theme'
@@ -56,6 +58,11 @@ const styles = {
   } as React.CSSProperties,
   link: {
     color: BOOKING_COLORS.lineGreen,
+    textDecoration: 'underline',
+    wordBreak: 'break-all' as const,
+  } as React.CSSProperties,
+  linkIg: {
+    color: BOOKING_COLORS.pinkVividDeep,
     textDecoration: 'underline',
     wordBreak: 'break-all' as const,
   } as React.CSSProperties,
@@ -128,7 +135,7 @@ export function CourtRules() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 2. 報名須知（含 LINE 連結注入）
+// 2. 報名須知（含 LINE / IG 連結注入）
 // ─────────────────────────────────────────────────────────────
 export function RegistrationNotice({ venueInfo }: { venueInfo: PublicVenueInfo }) {
   return (
@@ -145,16 +152,24 @@ export function RegistrationNotice({ venueInfo }: { venueInfo: PublicVenueInfo }
 
       <ul style={{ margin: '0 0 12px', paddingLeft: 22, fontSize: 13, lineHeight: 1.9, color: BOOKING_COLORS.textSecondary }}>
         <li>
-          🟢 LINE 官方帳號 →{' '}
+          🟢{' '}
           <a href={venueInfo.lineOfficialUrl} target="_blank" rel="noopener noreferrer" style={styles.link}>
-            {venueInfo.lineOfficialUrl}
+            點此加入 LINE 官方帳號
           </a>
         </li>
         {venueInfo.lineCommunityUrl ? (
           <li style={{ marginTop: 4 }}>
-            🟢 LINE 社群 →{' '}
+            🟢{' '}
             <a href={venueInfo.lineCommunityUrl} target="_blank" rel="noopener noreferrer" style={styles.link}>
-              {venueInfo.lineCommunityUrl}
+              點此加入 LINE 社群
+            </a>
+          </li>
+        ) : null}
+        {venueInfo.instagramUrl ? (
+          <li style={{ marginTop: 4 }}>
+            📷{' '}
+            <a href={venueInfo.instagramUrl} target="_blank" rel="noopener noreferrer" style={styles.linkIg}>
+              追蹤 Instagram
             </a>
           </li>
         ) : null}
@@ -352,9 +367,54 @@ export function DamageCompensation() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 6. 車輛停放規定（含停車示意圖 SVG）
+// 6. 車輛停放規定（依館 slug 分流）
 // ─────────────────────────────────────────────────────────────
-export function ParkingRules() {
+// 七個館型態完全不同：
+//   - 飛翼：原 SVG 示意圖 + 文字（既有）
+//   - Ace 2.0 / Ace 3.0：純文字描述
+//   - 就醬瘋 / Hibi / play one：館主提供的停車示意圖（/parking/{slug}.jpg）+ 文字補充
+//   - 球魔方 2.0：開幕中，純訊息
+// 共用 ParkingRules 入口元件接 venueSlug，內部分流到對應 sub-component。
+// ─────────────────────────────────────────────────────────────
+
+export function ParkingRules({ venueSlug }: { venueSlug: string }) {
+  switch (venueSlug) {
+    case 'ace2.0':     return <Ace20Parking />
+    case 'ace3.0':     return <Ace30Parking />
+    case 'smash':      return <SmashParking />
+    case 'hibi':       return <HibiParking />
+    case 'playone':    return <PlayoneParking />
+    case 'magicblock': return <MagicblockParking />
+    case 'flywing':
+    default:           return <FlywingParking />
+  }
+}
+
+// 共用樣式：停車圖片區
+const parkingImageBoxStyle: React.CSSProperties = {
+  marginTop: 14,
+  padding: 12,
+  background: '#fafafa',
+  borderRadius: BOOKING_RADIUS.md,
+  border: `1px solid ${BOOKING_COLORS.borderLight}`,
+}
+const parkingImageCaptionStyle: React.CSSProperties = {
+  fontSize: 11,
+  color: BOOKING_COLORS.textMuted,
+  marginBottom: 8,
+  textAlign: 'center',
+  letterSpacing: 1,
+}
+const parkingNoteStyle: React.CSSProperties = {
+  ...styles.para,
+  margin: 0,
+  color: BOOKING_COLORS.textPrimary,
+}
+
+// ─────────────────────────────────────────────────────────────
+// 飛翼（保留既有：文字 + SVG 示意圖）
+// ─────────────────────────────────────────────────────────────
+function FlywingParking() {
   return (
     <>
       <p style={styles.paraStrong}>汽 / 機車：</p>
@@ -367,19 +427,8 @@ export function ParkingRules() {
       </p>
 
       {/* SVG 停車示意圖 — 純 inline，無外部資源 */}
-      <div style={{
-        marginTop: 14,
-        padding: 12,
-        background: '#fafafa',
-        borderRadius: BOOKING_RADIUS.md,
-        border: `1px solid ${BOOKING_COLORS.borderLight}`,
-      }}>
-        <div style={{
-          fontSize: 11, color: BOOKING_COLORS.textMuted, marginBottom: 8,
-          textAlign: 'center', letterSpacing: 1,
-        }}>
-          停車示意圖
-        </div>
+      <div style={parkingImageBoxStyle}>
+        <div style={parkingImageCaptionStyle}>停車示意圖</div>
         <svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" style={{ width: '100%', height: 'auto' }}>
           {/* 道路底 */}
           <rect x="0" y="0" width="320" height="200" fill="transparent" />
@@ -438,5 +487,230 @@ export function ParkingRules() {
         </div>
       </div>
     </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ace 2.0（純文字）
+// ─────────────────────────────────────────────────────────────
+function Ace20Parking() {
+  return (
+    <>
+      <p style={styles.paraStrong}>🚗 汽車：</p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        請停放在馬路兩側無紅線處。
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        如停在其他倉庫廠房前，請記得留下聯絡電話。
+      </p>
+      <div style={{ ...styles.noticeBox, background: '#fff5f5', borderColor: '#f4cccc' }}>
+        <p style={parkingNoteStyle}>
+          <span style={styles.triangle}>⚠️</span>
+          紅線處禁止停放汽車，會被拖吊！
+        </p>
+      </div>
+
+      <p style={{ ...styles.paraStrong, marginTop: 16 }}>🛵 機車：</p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        請停放在館前斜坡，依序並排停好。
+      </p>
+      <div style={{ ...styles.noticeBox, background: '#fff5f5', borderColor: '#f4cccc' }}>
+        <p style={parkingNoteStyle}>
+          <span style={styles.triangle}>⚠️</span>
+          紅磚人行道禁止停機車，會被開罰單！
+        </p>
+      </div>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Ace 3.0（純文字）
+// ─────────────────────────────────────────────────────────────
+function Ace30Parking() {
+  return (
+    <>
+      <p style={styles.paraStrong}>💡 提醒大家～</p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        機車可以停在鐵捲門前面！
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        如果怕認不出來哪間，看門口有鞋櫃跟拼接木地板就是我們了 💖
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        汽車停車格有兩格～
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        其他位置要看鄰居有沒有上班。
+      </p>
+      <div style={styles.noticeBox}>
+        <p style={parkingNoteStyle}>
+          <span style={styles.triangle}>⚠️</span>
+          如果要借停，記得留下手機號碼！
+        </p>
+      </div>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// 就醬瘋（圖片 + 文字補充）
+// ─────────────────────────────────────────────────────────────
+function SmashParking() {
+  return (
+    <>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        <strong style={{ color: BOOKING_COLORS.textPrimary }}>機車</strong>
+        可停放約 <strong>20 台</strong>，請停於白線格子內。
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        <strong style={{ color: BOOKING_COLORS.textPrimary }}>汽車</strong>
+        可停放 <strong>5 台</strong>，入口是個上坡喔！
+      </p>
+      <div style={{ ...styles.noticeBox, background: '#fff5f5', borderColor: '#f4cccc' }}>
+        <p style={parkingNoteStyle}>
+          <span style={styles.triangle}>⚠️</span>
+          「汽車迴轉區域」請勿停車！
+        </p>
+      </div>
+      <p style={{ ...styles.para, marginTop: 10 }}>
+        <span style={styles.triangle}>▲</span>
+        汽車若停滿，可至園區二路左轉 200 公尺收費停車場。
+      </p>
+
+      <div style={parkingImageBoxStyle}>
+        <div style={parkingImageCaptionStyle}>停車示意圖</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/parking/smash.jpg"
+          alt="就醬瘋停車示意圖"
+          style={{ width: '100%', height: 'auto', display: 'block', borderRadius: 6 }}
+        />
+      </div>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// Hibi 日日（圖片 + 文字補充）
+// ─────────────────────────────────────────────────────────────
+function HibiParking() {
+  return (
+    <>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        綠色 ✅ 標示為可停放位置，紅色 ❌ 為禁停區域。
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        機車請停於館前「<strong>機車停車區域</strong>」。
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        館左右兩側區域與斜線格皆不可停。
+      </p>
+      <div style={{ ...styles.noticeBox, background: '#fff5f5', borderColor: '#f4cccc' }}>
+        <p style={parkingNoteStyle}>
+          <span style={styles.triangle}>⚠️</span>
+          如以上車位停滿，巷口右轉有收費停車場。
+        </p>
+        <p style={{ ...parkingNoteStyle, marginTop: 6 }}>
+          <span style={styles.triangle}>⚠️</span>
+          請各位球友勿隨意停放車輛，本場不負保管責任，敬請配合！
+        </p>
+      </div>
+
+      <div style={parkingImageBoxStyle}>
+        <div style={parkingImageCaptionStyle}>停車示意圖</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/parking/hibi.jpg"
+          alt="Hibi 日日停車示意圖"
+          style={{ width: '100%', height: 'auto', display: 'block', borderRadius: 6 }}
+        />
+      </div>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// play one（圖片 + 文字補充）
+// ─────────────────────────────────────────────────────────────
+function PlayoneParking() {
+  return (
+    <>
+      <p style={styles.paraStrong}>📍 巧克力街 16 號各號可停範圍</p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        <strong style={{ color: BOOKING_COLORS.textPrimary }}>16-1 號</strong>
+        ：平假日都可以停車（含機車停車格與水塔旁）。
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        <strong style={{ color: BOOKING_COLORS.textPrimary }}>16-4、16-5 號</strong>
+        ：假日可停。
+      </p>
+      <p style={styles.para}>
+        <span style={styles.diamond}>◆</span>
+        <strong style={{ color: BOOKING_COLORS.textPrimary }}>16-3 號</strong>
+        ：假日不可停。
+      </p>
+      <div style={{ ...styles.noticeBox, background: '#fff5f5', borderColor: '#f4cccc' }}>
+        <p style={parkingNoteStyle}>
+          <span style={styles.triangle}>⚠️</span>
+          <strong style={{ color: BOOKING_COLORS.textPrimary }}>16-2 號禁止停車</strong>
+        </p>
+      </div>
+
+      <div style={parkingImageBoxStyle}>
+        <div style={parkingImageCaptionStyle}>停車示意圖</div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/parking/playone.jpg"
+          alt="PLAYONE 停車示意圖"
+          style={{ width: '100%', height: 'auto', display: 'block', borderRadius: 6 }}
+        />
+      </div>
+    </>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
+// 球魔方 2.0（開幕中 placeholder）
+// ─────────────────────────────────────────────────────────────
+function MagicblockParking() {
+  return (
+    <div style={{
+      padding: '32px 20px',
+      textAlign: 'center',
+      background: BOOKING_COLORS.pinkSoft,
+      borderRadius: BOOKING_RADIUS.md,
+      border: `1px dashed ${BOOKING_COLORS.pinkBorder}`,
+    }}>
+      <div style={{ fontSize: 36, marginBottom: 12 }}>🏐</div>
+      <p style={{
+        fontSize: 16, fontWeight: 700, color: BOOKING_COLORS.pinkVividDeep,
+        margin: '0 0 8px',
+      }}>
+        7/1 開幕敬請期待！
+      </p>
+      <p style={{
+        fontSize: 12.5, color: BOOKING_COLORS.textSecondary,
+        margin: 0, lineHeight: 1.7,
+      }}>
+        停車資訊將於開幕前公布，
+        <br />
+        請鎖定 LINE 官方帳號 / 社群更新。
+      </p>
+    </div>
   )
 }
