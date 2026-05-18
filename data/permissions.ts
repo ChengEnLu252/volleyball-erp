@@ -22,6 +22,7 @@ import type { UserVenueRole, VenueRole } from '@/types'
 
 export type PageKey =
   | 'dashboard'
+  | 'ai-summary'
   | 'sessions'
   | 'checkin'
   | 'customers'
@@ -42,6 +43,7 @@ export type PageKey =
 
 export const PAGE_LABEL: Record<PageKey, string> = {
   'dashboard':        '總覽',
+  'ai-summary':       'AI 營運摘要',
   'sessions':         '場次管理',
   'checkin':          '前台操作',
   'customers':        '客戶資料',
@@ -94,6 +96,8 @@ export type PageAccess =
 /** 權限矩陣（11 頁 × 4 角色） */
 export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAccess>> = {
   'dashboard':        { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // 階段 15：AI 營運摘要 — 與 dashboard 同層級（owner 全部、manager 自己館、staff 擋）
+  'ai-summary':       { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   'sessions':         { owner: 'full', manager: 'own_venue', staff: 'own_venue', none: 'denied' },
   'checkin':          { owner: 'full', manager: 'own_venue', staff: 'own_venue', none: 'denied' },
   'customers':        { owner: 'full', manager: 'own_venue', staff: 'own_venue', none: 'denied' },
@@ -184,6 +188,7 @@ export function pathToPageKey(path: string): PageKey | null {
     ['finance/payments', '/finance/payments'],
     ['finance/refunds',  '/finance/refunds'],
     ['booking-overview', '/booking-overview'],
+    ['ai-summary',       '/ai-summary'],
     ['dashboard',        '/dashboard'],
     ['sessions',         '/sessions'],
     ['checkin',          '/checkin'],

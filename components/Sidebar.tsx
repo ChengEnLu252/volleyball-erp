@@ -36,21 +36,22 @@ interface NavLink {
 
 // —— Nav 清單（順序 = sidebar 顯示順序）——
 const ALL_LINKS: NavLink[] = [
-  { pageKey: 'dashboard',        href: '/dashboard',        label: '總覽',     icon: '▦'  },
-  { pageKey: 'sessions',         href: '/sessions',         label: '場次管理', icon: '📋' },
-  { pageKey: 'booking-overview', href: '/booking-overview', label: '報名熱度', icon: '📈' },
-  { pageKey: 'checkin',          href: '/checkin',          label: '前台操作', icon: '✓'  },
-  { pageKey: 'customers',        href: '/customers',        label: '客戶資料', icon: '👤' },
-  { pageKey: 'products',         href: '/products',         label: '商品管理', icon: '📦' },
-  { pageKey: 'finance',          href: '/finance',          label: '財務報表', icon: '💰' },
-  { pageKey: 'performance',      href: '/performance',      label: '館長績效', icon: '🏆' },
-  { pageKey: 'reconciliation',   href: '/reconciliation',   label: '對帳系統', icon: '⚖️' },
-  { pageKey: 'captains',         href: '/captains',         label: '主揪管理', icon: '🎯' },
-  { pageKey: 'finance/payments', href: '/finance/payments', label: '報表匯出', icon: '📤' },
-  { pageKey: 'finance/refunds',  href: '/finance/refunds',  label: '退費處理', icon: '💸' },
-  { pageKey: 'audit',            href: '/audit',            label: '操作紀錄', icon: '🔍' },
-  { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證', icon: '📎' },
-  { pageKey: 'integrations',     href: '/integrations',     label: '整合設定', icon: '🔗' },
+  { pageKey: 'dashboard',        href: '/dashboard',        label: '總覽',         icon: '▦'  },
+  { pageKey: 'ai-summary',       href: '/ai-summary',       label: 'AI 營運摘要', icon: '🤖' },
+  { pageKey: 'sessions',         href: '/sessions',         label: '場次管理',     icon: '📋' },
+  { pageKey: 'booking-overview', href: '/booking-overview', label: '報名熱度',     icon: '📈' },
+  { pageKey: 'checkin',          href: '/checkin',          label: '前台操作',     icon: '✓'  },
+  { pageKey: 'customers',        href: '/customers',        label: '客戶資料',     icon: '👤' },
+  { pageKey: 'products',         href: '/products',         label: '商品管理',     icon: '📦' },
+  { pageKey: 'finance',          href: '/finance',          label: '財務報表',     icon: '💰' },
+  { pageKey: 'performance',      href: '/performance',      label: '館長績效',     icon: '🏆' },
+  { pageKey: 'reconciliation',   href: '/reconciliation',   label: '對帳系統',     icon: '⚖️' },
+  { pageKey: 'captains',         href: '/captains',         label: '主揪管理',     icon: '🎯' },
+  { pageKey: 'finance/payments', href: '/finance/payments', label: '報表匯出',     icon: '📤' },
+  { pageKey: 'finance/refunds',  href: '/finance/refunds',  label: '退費處理',     icon: '💸' },
+  { pageKey: 'audit',            href: '/audit',            label: '操作紀錄',     icon: '🔍' },
+  { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證',     icon: '📎' },
+  { pageKey: 'integrations',     href: '/integrations',     label: '整合設定',     icon: '🔗' },
 ]
 
 const BOOKING_LINKS = [
@@ -148,7 +149,7 @@ export default function Sidebar() {
               color: active ? '#fff' : COLORS.ink700,
               textDecoration: 'none',
               fontSize: 12,
-              fontWeight: active ? 700 : 500,
+              fontWeight: active ? 800 : 700,
               background: active
                 ? `linear-gradient(95deg, ${COLORS.pink500} 0%, ${COLORS.pink400} 100%)`
                 : 'transparent',
@@ -202,7 +203,7 @@ export default function Sidebar() {
               color: active ? COLORS.pink700 : COLORS.ink500,
               textDecoration: 'none',
               fontSize: 11,
-              fontWeight: active ? 700 : 500,
+              fontWeight: active ? 800 : 700,
               background: active ? 'rgba(255,45,138,0.1)' : 'transparent',
             }}>
               <span style={{
@@ -254,10 +255,10 @@ export default function Sidebar() {
                 VolleyOps
               </div>
               <div className="vop-mono" style={{
-                fontSize: 8.5, color: COLORS.pink700,
-                letterSpacing: '0.15em', marginTop: 1, fontWeight: 700,
+                fontSize: 9, color: COLORS.pink700,
+                letterSpacing: '0.1em', marginTop: 1, fontWeight: 800,
               }}>
-                // 館管系統
+                排球館管理系統
               </div>
             </div>
           </div>

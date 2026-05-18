@@ -5644,3 +5644,559 @@ export function createCustomSession(args: {
 
   return { ok: true, sessionId: id }
 }
+
+// ============================================================
+// 階段 15：AI 營運摘要進階分析
+// ============================================================
+// 在原本 getAiInsights() 的基礎上，提供 6 個獨立的 AI 分析模組，
+// 由新頁面 /ai-summary 消費。所有函數都是「從現有資料推導」，
+// 不接外部 LLM；future 接 Claude API 時把這層當 retrieval baseline。
+//
+//   1. getPricingRecommendations    — 智能定價建議（依時段滿場率）
+//   2. getChurnRiskCustomers        — 客戶流失預警（掉粉名單）
+//   3. getSchedulingRecommendations — 場次排程建議（該開哪些場）
+//   4. getAnomalyDetections         — 異常檢測（贈送/退費/未付異常）
+//   5. getCaptainPerformanceAnalysis— 主揪表現分析（高/低分群）
+//   6. getAutoReport                — 週/月自動報告產生
+// ============================================================
+
+
+// ── 15.1 智能定價建議 ───────────────────────────────────────
+
+export type PricingAction = 'increase' | 'decrease' | 'maintain'
+
+export interface PricingRecommendation {
+  venueId: string
+  venueName: string
+  timeSlotLabel: string         // 「週末下午」「平日晚場」等
+  sampleSize: number            // 用幾場資料推得
+  avgFillRate: number           // 0..100
+  avgCourtFee: number           // 平均球費
+  action: PricingAction
+  suggestedPrice: number        // 建議球費
+  reasoning: string
+}
+
+/** 時段桶：依「平/週末 × 上午/下午/晚場」分 6 類 */
+function _bucketLabel(dateStr: string, startTime: string): string {
+  const dow = new Date(dateStr + 'T00:00:00Z').getUTCDay()  // 0=Sun, 6=Sat
+  const isWeekend = dow === 0 || dow === 6
+  const hour = parseInt(startTime.split(':')[0], 10)
+  const period = hour < 12 ? '上午' : hour < 17 ? '下午' : '晚場'
+  return `${isWeekend ? '週末' : '平日'}${period}`
+}
+
+export function getPricingRecommendations(): PricingRecommendation[] {
+  const since = dateAddDays(TODAY_STR, -28)
+  const results: PricingRecommendation[] = []
+
+  for (const v of listVenues()) {
+    const sessions = listSessions({ venueId: v.id, dateFrom: since, dateTo: TODAY_STR })
+      .filter(s => s.status === 'completed')
+
+    // 依時段桶分群
+    const buckets = new Map<string, typeof sessions>()
+    for (const s of sessions) {
+      const key = _bucketLabel(s.sessionDate, s.startTime)
+      const arr = buckets.get(key) ?? []
+      arr.push(s)
+      buckets.set(key, arr)
+    }
+
+    for (const [label, arr] of buckets) {
+      if (arr.length < 3) continue  // 樣本太少，不給建議
+      const cap = arr.reduce((s, x) => s + x.maxCapacity, 0)
+      const reg = arr.reduce((s, x) => s + (x.currentCount ?? 0), 0)
+      const fill = cap > 0 ? Math.round((reg / cap) * 100) : 0
+      const avgFee = Math.round(arr.reduce((s, x) => s + x.courtFee, 0) / arr.length)
+
+      let action: PricingAction = 'maintain'
+      let suggested = avgFee
+      let reasoning = `${arr.length} 場樣本，滿場率 ${fill}%，建議維持現價 $${avgFee}。`
+
+      if (fill >= 85) {
+        action = 'increase'
+        suggested = Math.round(avgFee * 1.1 / 10) * 10
+        reasoning = `${label} ${arr.length} 場滿場率達 ${fill}%，建議調漲 10% 至 $${suggested}。`
+      } else if (fill < 50) {
+        action = 'decrease'
+        suggested = Math.round(avgFee * 0.85 / 10) * 10
+        reasoning = `${label} ${arr.length} 場滿場率僅 ${fill}%，建議降至 $${suggested} 吸引客流。`
+      }
+
+      results.push({
+        venueId: v.id, venueName: v.name,
+        timeSlotLabel: label,
+        sampleSize: arr.length, avgFillRate: fill, avgCourtFee: avgFee,
+        action, suggestedPrice: suggested, reasoning,
+      })
+    }
+  }
+
+  // 排序：先建議改價的（增 > 減），再依滿場率 desc
+  const actionWeight = (a: PricingAction) => a === 'increase' ? 0 : a === 'decrease' ? 1 : 2
+  return results.sort((a, b) => {
+    const aw = actionWeight(a.action) - actionWeight(b.action)
+    return aw !== 0 ? aw : b.avgFillRate - a.avgFillRate
+  })
+}
+
+
+// ── 15.2 客戶流失預警 ───────────────────────────────────────
+
+export type ChurnRiskLevel = 'high' | 'medium' | 'low'
+
+export interface ChurnRiskCustomer {
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+  lastVisitDate: string | null
+  daysSinceLastVisit: number
+  lifetimeVisits: number
+  avgGapDays: number            // 過去出席的平均間隔
+  riskLevel: ChurnRiskLevel
+  suggestedAction: string
+}
+
+export function getChurnRiskCustomers(limit: number = 20): ChurnRiskCustomer[] {
+  const today = new Date(TODAY_STR + 'T00:00:00Z')
+  const customers = listCustomers()
+  const allSessions = listSessions()
+  const sessionDateById = new Map<string, string>()
+  for (const s of allSessions) sessionDateById.set(s.id, s.sessionDate)
+
+  const results: ChurnRiskCustomer[] = []
+
+  for (const c of customers) {
+    const regs = listRegistrations({ customerId: c.id })
+      .filter(r => r.status === 'attended' || r.status === 'registered')
+
+    // 把每筆 reg 對應到 session 日期
+    const dates = regs
+      .map(r => sessionDateById.get(r.sessionId))
+      .filter((d): d is string => !!d)
+      .sort()
+
+    if (dates.length < 3) continue   // 樣本不足
+
+    const lastDate = dates[dates.length - 1]
+    const lastVisit = new Date(lastDate + 'T00:00:00Z')
+    const daysSince = Math.floor((today.getTime() - lastVisit.getTime()) / 86400000)
+
+    // 計算平均間隔（最後 6 次的 gap 取平均，避免老用戶被早期稀疏紀錄拉高）
+    const recent = dates.slice(-6)
+    let gapSum = 0
+    let gapCount = 0
+    for (let i = 1; i < recent.length; i++) {
+      const a = new Date(recent[i - 1] + 'T00:00:00Z').getTime()
+      const b = new Date(recent[i] + 'T00:00:00Z').getTime()
+      gapSum += (b - a) / 86400000
+      gapCount++
+    }
+    const avgGap = gapCount > 0 ? Math.round(gapSum / gapCount) : 14
+
+    // 判定風險：未到當 daysSince < avgGap * 1.5 不算
+    if (daysSince < avgGap * 1.5) continue
+
+    let risk: ChurnRiskLevel = 'low'
+    let action = '建議寄送活動推薦訊息。'
+
+    if (daysSince > avgGap * 3.5) {
+      risk = 'high'
+      action = '已超過平均間隔 3 倍以上，建議主動電聯關懷或贈送折扣券。'
+    } else if (daysSince > avgGap * 2.2) {
+      risk = 'medium'
+      action = '建議 LINE 推播專屬優惠或新場次資訊。'
+    }
+
+    results.push({
+      customerId: c.id, customerName: c.name, customerPhone: c.phone,
+      lastVisitDate: lastDate,
+      daysSinceLastVisit: daysSince,
+      lifetimeVisits: dates.length,
+      avgGapDays: avgGap,
+      riskLevel: risk,
+      suggestedAction: action,
+    })
+  }
+
+  // 風險高 > 中 > 低，再依 daysSince desc
+  const w: Record<ChurnRiskLevel, number> = { high: 0, medium: 1, low: 2 }
+  return results
+    .sort((a, b) => {
+      const x = w[a.riskLevel] - w[b.riskLevel]
+      return x !== 0 ? x : b.daysSinceLastVisit - a.daysSinceLastVisit
+    })
+    .slice(0, limit)
+}
+
+
+// ── 15.3 場次排程建議 ───────────────────────────────────────
+
+export type ScheduleAction = 'open_more' | 'reduce' | 'keep'
+
+export interface SchedulingRecommendation {
+  bucketLabel: string         // 「週末下午」等
+  sessionCount: number        // 過去 28 天此桶開了幾場
+  avgFillRate: number         // 0..100
+  action: ScheduleAction
+  reasoning: string
+}
+
+export function getSchedulingRecommendations(): SchedulingRecommendation[] {
+  const since = dateAddDays(TODAY_STR, -28)
+  const sessions = listSessions({ dateFrom: since, dateTo: TODAY_STR })
+    .filter(s => s.status === 'completed')
+
+  const buckets = new Map<string, typeof sessions>()
+  for (const s of sessions) {
+    const key = _bucketLabel(s.sessionDate, s.startTime)
+    const arr = buckets.get(key) ?? []
+    arr.push(s)
+    buckets.set(key, arr)
+  }
+
+  const results: SchedulingRecommendation[] = []
+  for (const [label, arr] of buckets) {
+    const cap = arr.reduce((s, x) => s + x.maxCapacity, 0)
+    const reg = arr.reduce((s, x) => s + (x.currentCount ?? 0), 0)
+    const fill = cap > 0 ? Math.round((reg / cap) * 100) : 0
+
+    let action: ScheduleAction = 'keep'
+    let reasoning = `過去 28 天開 ${arr.length} 場，滿場率 ${fill}%，建議維持。`
+
+    if (fill >= 80 && arr.length >= 4) {
+      action = 'open_more'
+      reasoning = `${label}滿場率 ${fill}% (${arr.length} 場)，已是熱門時段，建議下季加開 1–2 場相同時段。`
+    } else if (fill < 45 && arr.length >= 3) {
+      action = 'reduce'
+      reasoning = `${label}滿場率僅 ${fill}% (${arr.length} 場)，建議減少場次或合併到鄰近熱門時段。`
+    }
+
+    results.push({
+      bucketLabel: label,
+      sessionCount: arr.length,
+      avgFillRate: fill,
+      action,
+      reasoning,
+    })
+  }
+
+  // 建議加開 > 減少 > 維持，再依滿場率 desc
+  const w: Record<ScheduleAction, number> = { open_more: 0, reduce: 1, keep: 2 }
+  return results.sort((a, b) => {
+    const x = w[a.action] - w[b.action]
+    return x !== 0 ? x : b.avgFillRate - a.avgFillRate
+  })
+}
+
+
+// ── 15.4 異常檢測 ───────────────────────────────────────────
+
+export type AiAnomalySeverity = 'critical' | 'warning' | 'info'
+
+export interface AiAnomaly {
+  id: string
+  type: 'gift_ratio' | 'revenue_drop' | 'unpaid_excess' | 'low_stock' | 'signup_drop' | 'refund_spike'
+  severity: AiAnomalySeverity
+  venueId: string | null
+  venueName: string
+  message: string
+  metric: string             // 額外的量化資訊（給 UI tooltip 用）
+  suggestedAction: string
+}
+
+export function getAnomalyDetections(): AiAnomaly[] {
+  const out: AiAnomaly[] = []
+
+  // 一、把 system alerts 升級成 AI anomaly（重用既有 alerts 機制）
+  for (const a of listAlerts()) {
+    const sevMap: Record<AnomalyAlert['severity'], AiAnomalySeverity> = {
+      warning: 'warning',
+      critical: 'critical',
+    }
+    let action = '建議館主進入對應頁面進一步檢視。'
+    if (a.type === 'gift_ratio') action = '建議查看 Audit Log，確認是否有未授權的免費贈送行為。'
+    if (a.type === 'low_stock')  action = '建議本週內補貨，避免假日場次缺貨。'
+    if (a.type === 'revenue_drop') action = '檢查冷門時段是否有未開場、或近期是否有客戶流失。'
+    if (a.type === 'unpaid_excess') action = '建議工讀生現場催繳、或排程「自動 LINE 提醒」。'
+    if (a.type === 'signup_drop')  action = '檢查近期報名頁是否異常、或競品場館是否有新活動。'
+
+    out.push({
+      id: a.id,
+      type: a.type,
+      severity: sevMap[a.severity],
+      venueId: a.venueId,
+      venueName: a.venueName,
+      message: a.message,
+      metric: a.type,
+      suggestedAction: action,
+    })
+  }
+
+  // 二、退費突增偵測：近 14 天退費 / 進 14 天的退費筆數比
+  try {
+    const pending = getPendingRefunds()
+    if (pending.length >= 5) {
+      out.push({
+        id: 'ai-refund-spike',
+        type: 'refund_spike',
+        severity: pending.length >= 10 ? 'critical' : 'warning',
+        venueId: null,
+        venueName: '全館',
+        message: `目前累積 ${pending.length} 筆待退費未處理。`,
+        metric: `pending=${pending.length}`,
+        suggestedAction: '建議集中時間批次處理退費，避免顧客體驗下降。',
+      })
+    }
+  } catch {
+    // getPendingRefunds 內部依賴 store 可能還沒 hydrate，靜默略過
+  }
+
+  // 三、滿場率異常：近 7 天某館跌至 < 40%
+  const since = dateAddDays(TODAY_STR, -7)
+  for (const v of listVenues()) {
+    const arr = listSessions({ venueId: v.id, dateFrom: since, dateTo: TODAY_STR })
+      .filter(s => s.status === 'completed')
+    if (arr.length < 4) continue
+    const cap = arr.reduce((s, x) => s + x.maxCapacity, 0)
+    const reg = arr.reduce((s, x) => s + (x.currentCount ?? 0), 0)
+    const fill = cap > 0 ? Math.round((reg / cap) * 100) : 0
+    if (fill < 40) {
+      out.push({
+        id: `ai-low-fill-${v.id}`,
+        type: 'signup_drop',
+        severity: 'warning',
+        venueId: v.id,
+        venueName: v.name,
+        message: `${v.name}館近 7 日滿場率僅 ${fill}%（${arr.length} 場）。`,
+        metric: `fill=${fill}%`,
+        suggestedAction: '建議檢視場次設定、推播優惠或開立新客體驗場。',
+      })
+    }
+  }
+
+  // 排序：critical > warning > info
+  const w: Record<AiAnomalySeverity, number> = { critical: 0, warning: 1, info: 2 }
+  return out.sort((a, b) => w[a.severity] - w[b.severity])
+}
+
+
+// ── 15.5 主揪表現分析 ───────────────────────────────────────
+
+export interface CaptainPerformanceRow {
+  captainName: string
+  captainPhone: string
+  venueName: string
+  sessionsRun: number          // 季內已過場數
+  avgFillRate: number          // 0..100
+  paidRatio: number            // 0..1，季租金繳清比例
+  tier: 'top' | 'middle' | 'underperforming'
+  note: string
+}
+
+export interface CaptainAnalysisResult {
+  topCaptains: CaptainPerformanceRow[]
+  underperforming: CaptainPerformanceRow[]
+  totalCaptains: number
+  insights: string[]
+}
+
+export function getCaptainPerformanceAnalysis(): CaptainAnalysisResult {
+  // 1. 取所有 active SeasonRental
+  const rentals = GENERATED.seasonRentals.filter(r => r.status === 'active' || r.status === 'completed')
+  const rows: CaptainPerformanceRow[] = []
+
+  for (const r of rentals) {
+    // 找該季所有 sessions（必須 seasonRentalId 對應、且已 completed）
+    const sessions = GENERATED.sessions.filter(
+      s => s.seasonRentalId === r.id && (s.status === 'completed' || s.status === 'open'),
+    )
+    const completed = sessions.filter(s => s.status === 'completed')
+    if (completed.length === 0) continue
+
+    const cap = completed.reduce((s, x) => s + x.maxCapacity, 0)
+    const reg = completed.reduce((s, x) => s + (x.currentCount ?? 0), 0)
+    const fill = cap > 0 ? Math.round((reg / cap) * 100) : 0
+
+    const paidRatio = r.totalAmount > 0 ? (r.paidAmount ?? 0) / r.totalAmount : 0
+    // SeasonRental 沒 venueId 欄位，要從 timeslot 取
+    const timeslot = GENERATED.timeslots.find(t => t.id === r.timeslotId)
+    const venue = timeslot ? GENERATED.venues.find(v => v.id === timeslot.venueId) : null
+
+    rows.push({
+      captainName: r.captainName ?? '未命名主揪',
+      captainPhone: r.captainPhone ?? '',
+      venueName: venue?.name ?? '?',
+      sessionsRun: completed.length,
+      avgFillRate: fill,
+      paidRatio,
+      tier: 'middle',
+      note: '',
+    })
+  }
+
+  // 分群：滿場率 >= 80% 且 paidRatio === 1 → top；滿場率 < 50% 或 paidRatio < 0.7 → underperforming
+  for (const r of rows) {
+    if (r.avgFillRate >= 80 && r.paidRatio >= 0.99) {
+      r.tier = 'top'
+      r.note = `滿場率 ${r.avgFillRate}%、季租金已繳清，主揪穩定可靠。`
+    } else if (r.avgFillRate < 50 || r.paidRatio < 0.7) {
+      r.tier = 'underperforming'
+      const issues: string[] = []
+      if (r.avgFillRate < 50) issues.push(`滿場率僅 ${r.avgFillRate}%`)
+      if (r.paidRatio < 0.7) issues.push(`季租金僅繳 ${Math.round(r.paidRatio * 100)}%`)
+      r.note = `${issues.join('、')}，建議館主主動聯繫了解狀況。`
+    } else {
+      r.note = `滿場率 ${r.avgFillRate}%、繳款 ${Math.round(r.paidRatio * 100)}%，表現穩定。`
+    }
+  }
+
+  const top = rows.filter(r => r.tier === 'top').sort((a, b) => b.avgFillRate - a.avgFillRate).slice(0, 5)
+  const under = rows.filter(r => r.tier === 'underperforming').sort((a, b) => a.avgFillRate - b.avgFillRate).slice(0, 5)
+
+  const insights: string[] = []
+  if (top.length > 0) {
+    insights.push(`本季已有 ${top.length} 位「金牌主揪」（滿場率 ≥ 80% 且繳費準時），建議續約並推薦給其他館作模板。`)
+  }
+  if (under.length > 0) {
+    insights.push(`目前有 ${under.length} 位主揪表現低於期望，建議館主一對一溝通了解原因（場次時段、宣傳、人脈）。`)
+  }
+  if (rows.length > 0 && top.length === 0 && under.length === 0) {
+    insights.push(`所有主揪表現穩定中規中矩，可考慮為前 30% 主揪推出忠誠回饋方案。`)
+  }
+  if (rows.length === 0) {
+    insights.push('目前無進行中或已完成的季租單可供分析。')
+  }
+
+  return {
+    topCaptains: top,
+    underperforming: under,
+    totalCaptains: rows.length,
+    insights,
+  }
+}
+
+
+// ── 15.6 週/月自動報告 ─────────────────────────────────────
+
+export type ReportPeriod = 'week' | 'month'
+
+export interface AutoReport {
+  period: ReportPeriod
+  periodLabel: string
+  fromDate: string
+  toDate: string
+  totalRevenue: number
+  prevTotalRevenue: number
+  revenueDeltaPct: number          // 比上週/上月
+  totalSessions: number
+  totalPlayers: number
+  avgFillRate: number
+  topVenue: { name: string; revenue: number } | null
+  worstVenue: { name: string; revenue: number } | null
+  highlights: string[]              // 亮點
+  concerns: string[]                // 警示
+  recommendations: string[]         // 行動建議
+}
+
+export function getAutoReport(period: ReportPeriod = 'week'): AutoReport {
+  const days = period === 'week' ? 7 : 30
+  const toDate = TODAY_STR
+  const fromDate = dateAddDays(toDate, -(days - 1))
+  const prevTo = dateAddDays(fromDate, -1)
+  const prevFrom = dateAddDays(prevTo, -(days - 1))
+
+  // 用 listVenueSummaries 跑兩段 — 因為 summaries 是按日聚合的
+  let totalRevenue = 0
+  let totalPlayers = 0
+  let totalSessions = 0
+  const venueRevMap = new Map<string, { name: string; revenue: number }>()
+
+  for (let i = 0; i < days; i++) {
+    const d = dateAddDays(fromDate, i)
+    for (const s of listVenueSummaries(d)) {
+      totalRevenue += s.totalRevenue
+      totalPlayers += s.totalPlayers
+      totalSessions += s.totalSessions
+      const cur = venueRevMap.get(s.venueId)
+      venueRevMap.set(s.venueId, {
+        name: s.venueName,
+        revenue: (cur?.revenue ?? 0) + s.totalRevenue,
+      })
+    }
+  }
+
+  let prevTotalRevenue = 0
+  for (let i = 0; i < days; i++) {
+    const d = dateAddDays(prevFrom, i)
+    for (const s of listVenueSummaries(d)) {
+      prevTotalRevenue += s.totalRevenue
+    }
+  }
+
+  const revenueDeltaPct = prevTotalRevenue > 0
+    ? Math.round(((totalRevenue - prevTotalRevenue) / prevTotalRevenue) * 100)
+    : 0
+
+  // 滿場率：用此區間的 completed sessions
+  const sessions = listSessions({ dateFrom: fromDate, dateTo: toDate })
+    .filter(s => s.status === 'completed')
+  const cap = sessions.reduce((s, x) => s + x.maxCapacity, 0)
+  const reg = sessions.reduce((s, x) => s + (x.currentCount ?? 0), 0)
+  const avgFillRate = cap > 0 ? Math.round((reg / cap) * 100) : 0
+
+  const venueList = Array.from(venueRevMap.values()).sort((a, b) => b.revenue - a.revenue)
+  const topVenue = venueList[0] ?? null
+  const worstVenue = venueList.length > 1 ? venueList[venueList.length - 1] : null
+
+  // —— 推導亮點 / 警示 / 建議 ——
+  const highlights: string[] = []
+  const concerns: string[] = []
+  const recommendations: string[] = []
+
+  if (revenueDeltaPct > 5) {
+    highlights.push(`總營收較上${period === 'week' ? '週' : '月'}成長 ${revenueDeltaPct}%（$${totalRevenue.toLocaleString()}）。`)
+  } else if (revenueDeltaPct < -10) {
+    concerns.push(`總營收較上${period === 'week' ? '週' : '月'}下滑 ${Math.abs(revenueDeltaPct)}%，建議檢視冷門時段。`)
+    recommendations.push('召集館長會議檢討近期排程與報名熱度。')
+  }
+
+  if (topVenue) {
+    highlights.push(`${topVenue.name}館為本${period === 'week' ? '週' : '月'}營收冠軍（$${topVenue.revenue.toLocaleString()}）。`)
+  }
+  if (worstVenue && worstVenue.revenue < (topVenue?.revenue ?? 0) * 0.4) {
+    concerns.push(`${worstVenue.name}館營收顯著落後（$${worstVenue.revenue.toLocaleString()}，僅冠軍 ${Math.round((worstVenue.revenue / (topVenue!.revenue || 1)) * 100)}%）。`)
+    recommendations.push(`安排與${worstVenue.name}館長一對一檢討。`)
+  }
+
+  if (avgFillRate >= 75) {
+    highlights.push(`本期平均滿場率達 ${avgFillRate}%，已是高水位。`)
+    recommendations.push('考慮加開熱門時段或調漲球費 5–10%。')
+  } else if (avgFillRate < 50 && sessions.length >= 5) {
+    concerns.push(`本期平均滿場率僅 ${avgFillRate}%，產能利用率偏低。`)
+    recommendations.push('檢視最冷門時段、考慮合併或暫停。')
+  }
+
+  const periodLabel = period === 'week'
+    ? `近 7 天（${fromDate} ~ ${toDate}）`
+    : `近 30 天（${fromDate} ~ ${toDate}）`
+
+  return {
+    period,
+    periodLabel,
+    fromDate,
+    toDate,
+    totalRevenue,
+    prevTotalRevenue,
+    revenueDeltaPct,
+    totalSessions,
+    totalPlayers,
+    avgFillRate,
+    topVenue,
+    worstVenue,
+    highlights,
+    concerns,
+    recommendations,
+  }
+}

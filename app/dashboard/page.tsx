@@ -15,7 +15,7 @@ import {
   type DashboardStats,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
-import AiSection from '@/components/AiSection'
+import AiSummaryTeaser from '@/components/AiSummaryTeaser'
 import QiuQiu from '@/components/QiuQiu'
 import { COLORS, FONTS, VENUE_COLOR } from '@/components/theme/tokens'
 import type { DashboardData } from '@/types'
@@ -297,8 +297,8 @@ export default function DashboardPage() {
           </div>
         </Panel>
 
-        {/* AI 洞察 — 全館視角才顯示（原邏輯保留）*/}
-        {visible === 'all' && <AiSection insights={insights} />}
+        {/* AI 摘要精簡卡片 — 全館視角才顯示，跳轉至 /ai-summary 看完整版 */}
+        {visible === 'all' && <AiSummaryTeaser insights={insights} />}
       </div>
     </div>
   )
