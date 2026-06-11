@@ -12,6 +12,7 @@ import {
   ReconHeader, StatCard, Panel, SeverityBadge, Money,
 } from '@/components/reconciliation/Common'
 
+// 階段 21 M2：對帳簡化 — 15 子頁合併為 5 個入口（各入口內以頁籤切換原子頁）
 const SUBPAGES: {
   href: string
   icon: string
@@ -19,13 +20,11 @@ const SUBPAGES: {
   desc: string
   accent: string
 }[] = [
-  { href: '/reconciliation/sessions',       icon: '📅', title: '場次對帳',   desc: '逐場應收 vs 實收，標出少收場次', accent: '#2563eb' },
-  { href: '/reconciliation/season-rentals', icon: '🎫', title: '季租單對帳', desc: '主揪繳款狀況、欠款警示',         accent: '#d4a843' },
-  { href: '/reconciliation/products',       icon: '📦', title: '商品對帳',   desc: '銷售/贈送比例、各館分布',        accent: '#7c6af7' },
-  { href: '/reconciliation/unattended',     icon: '🚪', title: '無人場次',   desc: '自助回報 vs 實付，可疑客戶名單',  accent: '#f59e0b' },
-  { href: '/reconciliation/honest-shop',    icon: '💰', title: '誠實商店',   desc: '投錢箱盤點，缺口與匿名比例',     accent: '#a16207' },
-  { href: '/reconciliation/monthly',        icon: '📊', title: '月結對帳',   desc: '老闆對帳視角，月/季切換',        accent: '#10b981' },
-  { href: '/reconciliation/anomalies',      icon: '⚠️',  title: '異常清單',   desc: '所有需要追蹤的差異一覽',         accent: '#e85d3a' },
+  { href: '/reconciliation/collections', icon: '💵', title: '收款對帳',   desc: '場次 / 季租單 / 商品 / 無人場次 / 誠實商店',   accent: '#2563eb' },
+  { href: '/reconciliation/bookkeeping', icon: '📒', title: '記帳對帳',   desc: '館長月記帳輸入、對帳差異、月結',             accent: '#0d9488' },
+  { href: '/reconciliation/staff-pay',   icon: '🧑‍💼', title: '員工薪資',  desc: '工讀生時薪 + 管理職薪資（含冷門/年終獎金）', accent: '#0f766e' },
+  { href: '/reconciliation/compliance',  icon: '🧾', title: '規章罰則',   desc: '採購簽核 / 零用金 / 比賽企劃 / 報表繳交',     accent: '#b45309' },
+  { href: '/reconciliation/anomalies',   icon: '⚠️',  title: '異常清單',   desc: '所有需要追蹤的差異一覽',                     accent: '#e85d3a' },
 ]
 
 export default function ReconciliationOverviewPage() {

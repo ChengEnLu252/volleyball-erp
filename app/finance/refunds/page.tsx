@@ -20,6 +20,7 @@ import {
   getPendingRefunds, getRefundHistory,
   issueRefund, waiveRefund,
   listVenues, getCurrentVisibleVenueIds,
+  isConflictResult,
   type PendingRefundRow, type RefundHistoryRow, type RefundHistoryFilter,
 } from '@/data/api'
 import { useStoreSync, hydrateStore } from '@/data/store'
@@ -341,8 +342,8 @@ function RefundModal({
       baseUpdatedAt,
     })
     setSubmitting(false)
-    if ('conflict' in result && result.conflict) {
-      onConflict(result as ConflictResult)
+    if (isConflictResult(result)) {
+      onConflict(result)
       return
     }
     if (!result.ok) {
@@ -481,8 +482,8 @@ function WaiveModal({
       baseUpdatedAt,
     })
     setSubmitting(false)
-    if ('conflict' in result && result.conflict) {
-      onConflict(result as ConflictResult)
+    if (isConflictResult(result)) {
+      onConflict(result)
       return
     }
     if (!result.ok) {

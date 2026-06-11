@@ -19,8 +19,10 @@ export default function ChromeShell({ children }: { children: React.ReactNode })
   const pathname = usePathname()
   const isBookingSite = pathname.startsWith('/book/') || pathname === '/book'
   const isCaptainSite = pathname.startsWith('/captain/') || pathname === '/captain'
+  // 階段 17：線上商城公開頁（顧客用，無 ERP chrome / 登入閘門）
+  const isShopSite = pathname.startsWith('/shop/') || pathname === '/shop'
 
-  if (isBookingSite || isCaptainSite) {
+  if (isBookingSite || isCaptainSite || isShopSite) {
     // 公開頁 — 完全獨立，無 ERP chrome、無登入閘門
     return <>{children}</>
   }

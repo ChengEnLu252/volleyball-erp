@@ -13,6 +13,7 @@ import {
   adminCreateRental,
   buildCaptainUrl,
   getCurrentVisibleVenueIds,
+  isConflictResult,
   type AdminSeasonRentalRow,
 } from '@/data/api'
 import { useStoreSync } from '@/data/store'
@@ -276,8 +277,8 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
     const r = adminRegenerateToken(rental.id, { baseUpdatedAt })
     if (!r.ok) {
       // 階段 8：先檢查是否衝突；衝突走 banner，其他錯誤走 alert
-      if ('conflict' in r && r.conflict) {
-        setConflict(r as ConflictResult)
+      if (isConflictResult(r)) {
+        setConflict(r)
         return
       }
       alert(`⚠️ ${r.reason}`)
@@ -303,8 +304,8 @@ function RentalManageCard({ row }: { key?: string | number; row: AdminSeasonRent
     )) return
     const r = adminDeactivateRental(rental.id, { baseUpdatedAt })
     if (!r.ok) {
-      if ('conflict' in r && r.conflict) {
-        setConflict(r as ConflictResult)
+      if (isConflictResult(r)) {
+        setConflict(r)
         return
       }
       alert(`⚠️ ${r.reason}`)

@@ -28,6 +28,8 @@ import type {
   NetHeight, SkillLevel, SessionType, SessionStatus,
   RegistrationStatus, RegistrationType, RegistrationSource,
   PaymentMethod, PaymentStatus, ProductTransactionType, SeasonRentalStatus,
+  WeeklyGoal, AppNotification,
+  ShopProduct, Order,
 } from '@/types'
 
 
@@ -257,18 +259,39 @@ const DAILY_SLOTS = [
 
 const DOW_LABEL = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'] as const
 
-/** 場次熱冷分布 — return { isHot, fee } 給每個 (dow, slotIdx) */
-function slotHotness(dow: number, slotIdx: number): { isHot: boolean; fee: number } {
+/** 球費（場地費）— 與冷熱門無關，僅依 (dow, slotIdx) 定價。維持原值不動營收。 */
+function slotFee(dow: number, slotIdx: number): number {
   const isWeekend = dow === 0 || dow === 6
-  // 4 段：0=上午、1=午場、2=下午、3=晚場
-  if (isWeekend && slotIdx === 3) return { isHot: true,  fee: 300 } // 週末晚黃金
-  if (isWeekend && slotIdx === 2) return { isHot: true,  fee: 280 } // 週末下午
-  if (dow === 5 && slotIdx === 3) return { isHot: true,  fee: 280 } // 週五晚
-  if (isWeekend && slotIdx === 0) return { isHot: true,  fee: 250 } // 週末晨
-  if (slotIdx === 3)              return { isHot: false, fee: 250 } // 平日晚（中）
-  if (slotIdx === 2)              return { isHot: false, fee: 220 } // 平日下午（中冷）
-  if (slotIdx === 0)              return { isHot: false, fee: 200 } // 平日上午（冷）
-  return                                 { isHot: false, fee: 180 } // 平日午場（最冷）
+  if (isWeekend && slotIdx === 3) return 300 // 週末晚黃金
+  if (isWeekend && slotIdx === 2) return 280 // 週末下午
+  if (dow === 5 && slotIdx === 3) return 280 // 週五晚
+  if (isWeekend && slotIdx === 0) return 250 // 週末晨
+  if (slotIdx === 3)              return 250 // 平日晚
+  if (slotIdx === 2)              return 220 // 平日下午
+  if (slotIdx === 0)              return 200 // 平日上午
+  return                                 180 // 午場（最冷）
+}
+
+/**
+ * 場次熱冷分布 — 依「旭日管理規章 6-2」定義（對齊規章，階段 M2 修正）。
+ * 4 段：0=上午(09-12)、1=午場(12:20-15:20)、2=下午(15:40-18:40)、3=晚場(19:00-22:00)
+ *
+ * 冷門 = 平日 09:00-19:00、22:00 後、及假日 22:00 後 → 其餘為熱門。
+ *   一般館：平日晚場(19-22) 熱；平日其餘冷；假日(無 22 後場次) 全熱。
+ *   新竹館(v6) 另有定義：熱門 = 平日 19-22 ＆ 六日 12-18，其餘皆冷。
+ */
+function slotHotness(venueId: string, dow: number, slotIdx: number): { isHot: boolean; fee: number } {
+  const isWeekend = dow === 0 || dow === 6
+  const fee = slotFee(dow, slotIdx)
+  let isHot: boolean
+  if (venueId === 'v6') {
+    // 新竹：平日19-22(slot3) 熱；六日12-18(slot1午場、slot2下午) 熱；其餘冷
+    isHot = isWeekend ? (slotIdx === 1 || slotIdx === 2) : (slotIdx === 3)
+  } else {
+    // 一般館：平日19-22(slot3) 熱；假日 22 前全熱；平日其餘冷
+    isHot = isWeekend ? true : (slotIdx === 3)
+  }
+  return { isHot, fee }
 }
 
 /** 場次型態分布 */
@@ -297,7 +320,7 @@ for (const venue of VENUES) {
   for (let dow = 0; dow < 7; dow++) {
     for (let slotIdx = 0; slotIdx < 4; slotIdx++) {
       const slot = DAILY_SLOTS[slotIdx]
-      const { isHot, fee } = slotHotness(dow, slotIdx)
+      const { isHot, fee } = slotHotness(venue.id, dow, slotIdx)
       const { sessionType, netHeight, min, max } = slotKind(dow, slotIdx)
       // 旗艦館：熱門場切 A 場、其他切 B 場；單場館 court=null
       const court = MULTI_COURT_VENUES.has(venue.id) ? (isHot ? 'A 場' : 'B 場') : null
@@ -423,10 +446,11 @@ for (let dayOffset = -56; dayOffset <= 28; dayOffset++) {
     //  - 冷門時段：60% 活化（40% skip）
     //  - v7 Ace 3.0（新開幕）：再 ×0.7 折扣（資料量少 30%）
     // 球魔方 v1 故事：最近 7 天的「冷門時段」改成 cancelled，營收驟降
-    const isMagicblockColdRecent = ts.venueId === 'v1' && !ts.isHotZone && dayOffset >= -7 && dayOffset <= 0
-    if (isMagicblockColdRecent && chance(0.85)) continue  // 85% 機率乾脆不開
+    // 球魔方 v1 故事：最近 7 天場次大幅少開（冷門幾乎不開、熱門也縮減）→ 觸發 critical revenue_drop
+    const isMagicblockRecent = ts.venueId === 'v1' && dayOffset >= -7 && dayOffset <= 0
+    if (isMagicblockRecent && chance(ts.isHotZone ? 0.55 : 0.85)) continue
 
-    if (!isMagicblockColdRecent) {
+    if (!isMagicblockRecent) {
       const baseSkip = ts.isHotZone ? 0.10 : 0.40
       const v7Discount = ts.venueId === 'v7' ? 0.30 : 0
       if (chance(baseSkip + v7Discount)) continue
@@ -933,6 +957,227 @@ const DASHBOARD: DashboardData = {
 }
 
 
+// ── 16. 館長週目標 + 通知（階段 16） ─────────────────────────
+// 種子設計（與既有故事點一致）：
+//   - 本週：v3 飛翼(王館主 u2) 2 個待完成、v1 球魔方(李小芳 u3) 1 個待完成
+//   - 上週：v3 / v1 各 1 個「已確認」(展示歷史 / track record)
+//   - 通知：2 筆「已讀」的歷史確認通知 (收件匣不空、但 badge=0)
+//   實際 demo 跑「館長上傳 → 老闆收到未讀通知 → 確認」的活流程在 runtime 產生。
+
+/** 某日所在週的週一 (YYYY-MM-DD)。getUTCDay: 0=日..6=六 */
+function weekStartOf(dateStr: string): string {
+  const day = getDayOfWeek(dateStr)         // 0..6
+  const backToMonday = (day + 6) % 7        // 週一=0, 週日=6
+  return dateAddDays(dateStr, -backToMonday)
+}
+
+const THIS_WEEK = weekStartOf(TODAY_STR)
+const LAST_WEEK = dateAddDays(THIS_WEEK, -7)
+
+const WEEKLY_GOALS: WeeklyGoal[] = [
+  // 本週 — 待完成
+  {
+    id: 'wg1', venueId: 'v3', weekStart: THIS_WEEK,
+    description: '本週主推「護膝」，目標售出 5 件，貼海報並在報到時口頭推薦。',
+    source: 'owner_assigned', createdBy: 'u1', status: 'assigned',
+    evidenceId: null, submittedBy: null, submittedAt: null,
+    confirmedBy: null, confirmedAt: null, returnReason: null,
+    createdAt: isoAt(THIS_WEEK, 9, 0), updatedAt: isoAt(THIS_WEEK, 9, 0),
+  },
+  {
+    id: 'wg2', venueId: 'v3', weekStart: THIS_WEEK,
+    description: '推廣週四下午冷門場次：在社群發限時優惠貼文，截圖回報。',
+    source: 'manager_self', createdBy: 'u2', status: 'assigned',
+    evidenceId: null, submittedBy: null, submittedAt: null,
+    confirmedBy: null, confirmedAt: null, returnReason: null,
+    createdAt: isoAt(THIS_WEEK, 11, 30), updatedAt: isoAt(THIS_WEEK, 11, 30),
+  },
+  {
+    id: 'wg3', venueId: 'v1', weekStart: THIS_WEEK,
+    description: '週三晚場滿場率偏低，請設計揪團優惠並於 LINE 社群發布。',
+    source: 'owner_assigned', createdBy: 'u1', status: 'assigned',
+    evidenceId: null, submittedBy: null, submittedAt: null,
+    confirmedBy: null, confirmedAt: null, returnReason: null,
+    createdAt: isoAt(THIS_WEEK, 9, 15), updatedAt: isoAt(THIS_WEEK, 9, 15),
+  },
+  // 上週 — 已確認（歷史）
+  {
+    id: 'wg4', venueId: 'v3', weekStart: LAST_WEEK,
+    description: '上週主推「運動飲料」買二送一，目標清掉接近效期的庫存。',
+    source: 'owner_assigned', createdBy: 'u1', status: 'confirmed',
+    evidenceId: null, submittedBy: 'u2', submittedAt: isoAt(dateAddDays(LAST_WEEK, 5), 18, 0),
+    confirmedBy: 'u1', confirmedAt: isoAt(dateAddDays(LAST_WEEK, 6), 10, 0), returnReason: null,
+    createdAt: isoAt(LAST_WEEK, 9, 0), updatedAt: isoAt(dateAddDays(LAST_WEEK, 6), 10, 0),
+  },
+  {
+    id: 'wg5', venueId: 'v1', weekStart: LAST_WEEK,
+    description: '上週推廣平日上午場，發送老客戶回流券。',
+    source: 'owner_assigned', createdBy: 'u1', status: 'confirmed',
+    evidenceId: null, submittedBy: 'u3', submittedAt: isoAt(dateAddDays(LAST_WEEK, 4), 17, 30),
+    confirmedBy: 'u1', confirmedAt: isoAt(dateAddDays(LAST_WEEK, 6), 11, 0), returnReason: null,
+    createdAt: isoAt(LAST_WEEK, 9, 10), updatedAt: isoAt(dateAddDays(LAST_WEEK, 6), 11, 0),
+  },
+]
+
+const NOTIFICATIONS: AppNotification[] = [
+  // 上週兩筆已確認 → 已讀的歷史通知（給對應館長）
+  {
+    id: 'ntf1', type: 'goal_confirmed', recipientUserId: 'u2',
+    title: '目標已確認', body: '老闆已確認你上週「運動飲料買二送一」的完成回報。',
+    linkHref: '/goals', relatedType: 'WeeklyGoal', relatedId: 'wg4',
+    isRead: true, createdAt: isoAt(dateAddDays(LAST_WEEK, 6), 10, 0),
+  },
+  {
+    id: 'ntf2', type: 'goal_confirmed', recipientUserId: 'u3',
+    title: '目標已確認', body: '老闆已確認你上週「平日上午場推廣」的完成回報。',
+    linkHref: '/goals', relatedType: 'WeeklyGoal', relatedId: 'wg5',
+    isRead: true, createdAt: isoAt(dateAddDays(LAST_WEEK, 6), 11, 0),
+  },
+]
+
+
+// ── 16.5 階段 17：線上商城商品 + 示範訂單 ────────────────────
+// 商城是「單一統合商城」，把系統現有不重複商品整併成一份目錄；
+// 庫存用獨立的 onlineStock 池（與各館 venueProducts 完全分開）。
+// 目前沒真實商品圖 → emoji 佔位。
+
+// —— 規格商品建構工具 ——
+// 色票（前台 swatch 用；白色等淺色前台自動加描邊）
+const SHOP_COLORS = {
+  white: { name: '純白', hex: '#ffffff' },
+  black: { name: '墨黑', hex: '#2b2b2b' },
+  pink:  { name: '櫻花粉', hex: '#f3b6c8' },
+  blue:  { name: '湖水藍', hex: '#7fb6d8' },
+  whiteRed: { name: '白紅', hex: '#ef6b7e' },
+  blackGreen: { name: '黑綠', hex: '#2f6f4f' },
+} as const
+
+// 規格庫存樣式（含 0 = 售完、<=5 = 低庫存，讓 demo 徽章有變化）
+const STOCK_PATTERN = [14, 9, 0, 22, 4, 17, 28, 2, 11, 6, 0, 19]
+
+function buildVariants(sizes: string[], colors: { name: string }[]): { size: string | null; color: string | null; stock: number }[] {
+  const sizeAxis = sizes.length ? sizes : [null]
+  const colorAxis = colors.length ? colors.map(c => c.name) : [null]
+  const out: { size: string | null; color: string | null; stock: number }[] = []
+  let i = 0
+  for (const size of sizeAxis) {
+    for (const color of colorAxis) {
+      out.push({ size, color, stock: STOCK_PATTERN[i % STOCK_PATTERN.length] })
+      i++
+    }
+  }
+  return out
+}
+
+function mkVariantProduct(args: {
+  id: string; name: string; category: ShopProduct['category']; unitPrice: number
+  emoji: string; description: string; sizes: string[]; colors: ShopProduct['colors']
+}): ShopProduct {
+  const variants = buildVariants(args.sizes, args.colors)
+  return {
+    id: args.id, name: args.name, category: args.category, unitPrice: args.unitPrice,
+    onlineStock: variants.reduce((s, v) => s + v.stock, 0),
+    isListed: true, description: args.description, emoji: args.emoji,
+    imageUrl: null, sizes: args.sizes, colors: args.colors, variants,
+    sourceProductId: null, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z',
+  }
+}
+
+// 無規格商品的共用欄位
+const NOVAR: Pick<ShopProduct, 'imageUrl' | 'sizes' | 'colors' | 'variants'> = { imageUrl: null, sizes: [], colors: [], variants: [] }
+
+const SHOP_PRODUCTS: ShopProduct[] = [
+  { id: 'shop1', name: '運動飲料',   category: 'drink',     unitPrice: 35,  onlineStock: 120, isListed: true,  emoji: '🥤', description: '補充電解質，賽前賽後都適合。', sourceProductId: 'p1', ...NOVAR, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' },
+  { id: 'shop2', name: '護膝',       category: 'gear',      unitPrice: 280, onlineStock: 40,  isListed: true,  emoji: '🦵', description: '加壓支撐，保護膝關節，左右各一只。', sourceProductId: 'p2', ...NOVAR, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' },
+  { id: 'shop3', name: '排球',       category: 'gear',      unitPrice: 850, onlineStock: 25,  isListed: true,  emoji: '🏐', description: '比賽級 5 號排球，室內外皆可使用。', sourceProductId: 'p3', ...NOVAR, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' },
+  { id: 'shop4', name: '球魔方帽',   category: 'apparel',   unitPrice: 250, onlineStock: 18,  isListed: true,  emoji: '🧢', description: '球魔方聯名運動帽，吸濕排汗。', sourceProductId: 'p4', ...NOVAR, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' },
+  { id: 'shop6', name: '護踝',       category: 'gear',      unitPrice: 180, onlineStock: 30,  isListed: true,  emoji: '🦶', description: '可調式綁帶，穩定踝關節防扭傷。', sourceProductId: null, ...NOVAR, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' },
+  { id: 'shop7', name: '運動毛巾',   category: 'accessory', unitPrice: 120, onlineStock: 60,  isListed: true,  emoji: '🧴', description: '冷感速乾運動毛巾，附收納袋。', sourceProductId: null, ...NOVAR, createdAt: '2024-01-01T00:00:00Z', updatedAt: '2024-01-01T00:00:00Z' },
+
+  // —— 規格商品（尺寸 × 顏色，各規格獨立庫存）——
+  mkVariantProduct({
+    id: 'shop_jersey', name: '排球衣', category: 'apparel', unitPrice: 699, emoji: '👕',
+    description: '昇華印製排球衣，吸濕排汗、輕量透氣，適合比賽與練習。',
+    sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
+    colors: [SHOP_COLORS.white, SHOP_COLORS.black, SHOP_COLORS.pink, SHOP_COLORS.blue],
+  }),
+  mkVariantProduct({
+    id: 'shop_shorts', name: '排球褲', category: 'apparel', unitPrice: 420, emoji: '🩳',
+    description: '彈性排球短褲，剪裁俐落不卡動作，內裡止滑。',
+    sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL'],
+    colors: [SHOP_COLORS.white, SHOP_COLORS.black, SHOP_COLORS.blue],
+  }),
+  mkVariantProduct({
+    id: 'shop5', name: '排球襪', category: 'apparel', unitPrice: 180, emoji: '🧦',
+    description: '加厚毛巾底排球襪，止滑透氣、包覆腳踝，一組兩雙。',
+    sizes: ['22-25cm', '25-28cm'],
+    colors: [SHOP_COLORS.white, SHOP_COLORS.black, SHOP_COLORS.pink],
+  }),
+  mkVariantProduct({
+    id: 'shop_shoes', name: '排球鞋', category: 'apparel', unitPrice: 1880, emoji: '👟',
+    description: '室內排球鞋，止滑橡膠大底與良好支撐，急停起跳更穩定。',
+    sizes: ['EU 38', 'EU 39', 'EU 40', 'EU 41', 'EU 42', 'EU 43', 'EU 44', 'EU 45'],
+    colors: [SHOP_COLORS.whiteRed, SHOP_COLORS.blackGreen],
+  }),
+  mkVariantProduct({
+    id: 'shop_sleeve', name: '黑狗袖套', category: 'accessory', unitPrice: 220, emoji: '🦾',
+    description: '黑狗聯名運動袖套，防曬抗 UV、加壓支撐，一組兩只。',
+    sizes: ['S/M', 'L/XL'],
+    colors: [SHOP_COLORS.black, SHOP_COLORS.white, SHOP_COLORS.pink],
+  }),
+]
+
+// 示範訂單（demo 用，讓後台「商城訂單」頁一進去就有資料；
+// 三種狀態各一，涵蓋 pickup / shipping、online / backend）。
+const ORDERS: Order[] = [
+  {
+    id: 'ord_seed1', orderNo: 'SH-' + daysAgoStr(2).replace(/-/g, '') + '-0001',
+    channel: 'online',
+    customerName: '陳怡君', customerPhone: '0912-345-678', customerEmail: 'yijun@example.com',
+    placedByUserId: null,
+    items: [
+      { productId: 'shop1', name: '運動飲料', unitPrice: 35,  quantity: 6, subtotal: 210 },
+      { productId: 'shop5', name: '運動襪',   unitPrice: 80,  quantity: 1, subtotal: 80  },
+    ],
+    itemTotal: 290, shippingFee: 0, total: 290,
+    fulfillment: 'pickup', pickupVenueId: 'v3', shipping: null,
+    paymentChannel: 'cash_on_pickup', status: 'pending',
+    notes: '週六下午過去拿', paidAt: null, fulfilledAt: null, cancelledAt: null, cancelReason: null,
+    createdAt: isoAt(daysAgoStr(2), 14, 12), updatedAt: isoAt(daysAgoStr(2), 14, 12),
+  },
+  {
+    id: 'ord_seed2', orderNo: 'SH-' + daysAgoStr(4).replace(/-/g, '') + '-0002',
+    channel: 'online',
+    customerName: '林志明', customerPhone: '0922-888-123', customerEmail: null,
+    placedByUserId: null,
+    items: [
+      { productId: 'shop3', name: '排球', unitPrice: 850, quantity: 1, subtotal: 850 },
+    ],
+    itemTotal: 850, shippingFee: 80, total: 930,
+    fulfillment: 'shipping', pickupVenueId: null,
+    shipping: { recipient: '林志明', phone: '0922-888-123', address: '新北市新莊區中正路100號5樓' },
+    paymentChannel: 'online_gateway', status: 'paid',
+    notes: null, paidAt: isoAt(daysAgoStr(4), 9, 30), fulfilledAt: null, cancelledAt: null, cancelReason: null,
+    createdAt: isoAt(daysAgoStr(4), 9, 20), updatedAt: isoAt(daysAgoStr(4), 9, 30),
+  },
+  {
+    id: 'ord_seed3', orderNo: 'SH-' + daysAgoStr(8).replace(/-/g, '') + '-0003',
+    channel: 'backend',
+    customerName: '王大明', customerPhone: '0933-555-777', customerEmail: null,
+    placedByUserId: 'u3',
+    items: [
+      { productId: 'shop2', name: '護膝',     unitPrice: 280, quantity: 2, subtotal: 560 },
+      { productId: 'shop7', name: '運動毛巾', unitPrice: 120, quantity: 1, subtotal: 120 },
+    ],
+    itemTotal: 680, shippingFee: 0, total: 680,
+    fulfillment: 'pickup', pickupVenueId: 'v1', shipping: null,
+    paymentChannel: 'cash_on_pickup', status: 'fulfilled',
+    notes: '館長代客下單', paidAt: isoAt(daysAgoStr(8), 18, 0), fulfilledAt: isoAt(daysAgoStr(7), 19, 30), cancelledAt: null, cancelReason: null,
+    createdAt: isoAt(daysAgoStr(8), 17, 45), updatedAt: isoAt(daysAgoStr(7), 19, 30),
+  },
+]
+
+
 // ── 17. Export ──────────────────────────────────────────────
 
 export const GENERATED = {
@@ -952,4 +1197,8 @@ export const GENERATED = {
   alerts: ALERTS,
   unpaid: UNPAID,
   dashboard: DASHBOARD,
+  weeklyGoals: WEEKLY_GOALS,
+  notifications: NOTIFICATIONS,
+  shopProducts: SHOP_PRODUCTS,
+  orders: ORDERS,
 } as const

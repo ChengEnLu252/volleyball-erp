@@ -55,6 +55,16 @@ const ACTION_STYLE: Record<AuditAction, ActionStyle> = {
   // 階段 10（退費鏈）— 綠色「退錢出去」、灰色「不退」明確區分
   ISSUE_REFUND:               { label: '💰 開退費',     color: '#166534', bg: '#dcfce7' },
   WAIVE_REFUND:               { label: '放棄退費',      color: '#6b7280', bg: '#f3f4f6' },
+  CREATE_WEEKLY_GOAL:         { label: '🎯 建立目標',   color: '#9d174d', bg: '#fce7f3' },
+  SUBMIT_WEEKLY_GOAL:         { label: '提交目標',      color: '#946700', bg: '#fff3cd' },
+  CONFIRM_WEEKLY_GOAL:        { label: '✓ 確認目標',    color: '#067a5b', bg: '#e0f5ed' },
+  RETURN_WEEKLY_GOAL:         { label: '↩ 退回目標',    color: '#9d174d', bg: '#fce7f3' },
+  // 階段 17（線上商城訂單）— 下單綠、付款藍、完成深綠、取消紅、庫存藍
+  CREATE_ORDER:               { label: '🛒 商城下單',   color: '#166534', bg: '#dcfce7' },
+  PAY_ORDER:                  { label: '訂單付款',      color: '#1e40af', bg: '#dbeafe' },
+  FULFILL_ORDER:              { label: '✓ 訂單完成',    color: '#067a5b', bg: '#e0f5ed' },
+  CANCEL_ORDER:               { label: '取消訂單',      color: '#991b1b', bg: '#fee2e2' },
+  ADJUST_SHOP_STOCK:          { label: '商城庫存',      color: '#1e40af', bg: '#dbeafe' },
 }
 
 const DEFAULT_STYLE: ActionStyle = { label: '其他', color: '#6b7280', bg: '#f3f4f6' }

@@ -9,6 +9,7 @@ import {
   captainMarkLeave,
   captainUnmarkLeave,
   captainAddWalkIn,
+  isConflictResult,
   type CaptainPortalData,
   type CaptainSessionSummary,
   type CaptainSessionDetail,
@@ -634,8 +635,8 @@ function SeasonPlayerLeaveRow({
       ? captainUnmarkLeave({ rentalId, registrationId: reg.id, baseUpdatedAt })
       : captainMarkLeave({ rentalId, registrationId: reg.id, baseUpdatedAt })
 
-    if ('conflict' in result && result.conflict) {
-      setConflict(result as ConflictResult)
+    if (isConflictResult(result)) {
+      setConflict(result)
       return
     }
     if (!result.ok) {

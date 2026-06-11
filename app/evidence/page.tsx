@@ -5,6 +5,7 @@ import {
   listAllEvidence, deleteEvidenceById,
   uploadEvidence, isEvidenceStoreAvailable,
   EVIDENCE_SOURCE_LABEL,
+  listBoxAudits, listProductTransfers, listWeeklyGoals,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import type { UploadedEvidence, EvidenceSourceType } from '@/types'
@@ -17,7 +18,8 @@ import RequireRole from '@/components/RequireRole'
  * 功能：
  *   - 列出所有 evidence meta + 縮圖
  *   - admin 刪除（會 mark blobAvailable=false 並從 IndexedDB 移除 blob）
- *   - 「生成示範憑證」一鍵 seed：用 Canvas 產 3 個 placeholder JPEG
+ *   - 「生成示範憑證」一鍵 seed：用 Canvas 產 4 種來源（自助回報轉帳 /
+ *     盤點現場 / 調貨簽收 / 館長目標完成）各一張 placeholder JPEG
  *     塞 IndexedDB + meta（demo 首次 load 用，無需網路）
  *
  * 權限：owner only（與 audit 同層級）。
@@ -72,25 +74,36 @@ function EvidenceContent() {
     }
     setBusy(true)
     try {
-      // 用 Canvas 產 3 個小張 placeholder JPEG 塞 IndexedDB
-      const samples = [
-        { name: '示範轉帳截圖_001.jpg', label: '轉帳完成', color: '#16a34a' },
-        { name: '示範轉帳截圖_002.jpg', label: '已付 $500', color: '#0e7490' },
-        { name: '示範轉帳截圖_003.jpg', label: 'NT$1,200',   color: '#7c3aed' },
+      // 四種來源各造一張示範圖。盡量掛到真實單據上（讓 audit 反查得到場館、
+      // 對應業務頁也看得到附件）；找不到對應記錄時 fall back 用 demo 假 id
+      // （venue 反查回 null，uploadEvidence 仍可正常寫入）。
+      const stamp = Date.now()
+      const boxAuditId = listBoxAudits()[0]?.id          ?? `ba_demo_seed_${stamp}`
+      const transferId = listProductTransfers()[0]?.id   ?? `xfer_demo_seed_${stamp}`
+      const goalId     = listWeeklyGoals()[0]?.id        ?? `wg_demo_seed_${stamp}`
+
+      const samples: Array<{
+        sourceType: EvidenceSourceType
+        sourceId: string
+        name: string
+        uploadedByName: string
+      }> = [
+        { sourceType: 'self_payment', sourceId: `r_demo_seed_${stamp}`, name: '示範_轉帳截圖_001.jpg', uploadedByName: '示範顧客' },
+        { sourceType: 'box_audit',    sourceId: boxAuditId,             name: '示範_盤點現場_001.jpg', uploadedByName: '示範員工' },
+        { sourceType: 'transfer',     sourceId: transferId,             name: '示範_調貨簽收_001.jpg', uploadedByName: '示範員工' },
+        { sourceType: 'captain_goal', sourceId: goalId,                 name: '示範_目標完成_001.jpg', uploadedByName: '示範館長' },
       ]
+
       let created = 0
       for (const s of samples) {
-        const blob = await makeSamplePngBlob(s.label, s.color)
+        const blob = await makeSampleEvidenceBlob(s.sourceType)
         if (!blob) continue
-        // 用 fake registrationId（生成的 id 不會對應真實 registration，但
-        // upload audit log 仍可寫；admin 列表會顯示原始 sourceId）
-        const fakeRegId = `r_demo_seed_${Date.now()}_${created}`
         const result = await uploadEvidence({
           blob,
           filename: s.name,
-          sourceType: 'self_payment',
-          sourceId: fakeRegId,
-          uploadedByName: '示範資料',
+          sourceType: s.sourceType,
+          sourceId: s.sourceId,
+          uploadedByName: s.uploadedByName,
         })
         if (result.ok) created++
       }
@@ -260,24 +273,47 @@ function EvidenceCard({
 }
 
 // ── Canvas → JPEG blob helper（純 client、無網路）─────────────
+// 依憑證來源類型畫出對應情境的示範圖（轉帳收據 / 盤點現場 / 調貨簽收 / 目標達成）。
 
-function makeSamplePngBlob(label: string, color: string): Promise<Blob | null> {
+function makeSampleEvidenceBlob(kind: EvidenceSourceType): Promise<Blob | null> {
   return new Promise((resolve) => {
     if (typeof document === 'undefined') return resolve(null)
+    const W = 240, H = 320
     const canvas = document.createElement('canvas')
-    canvas.width = 240
-    canvas.height = 320
+    canvas.width = W
+    canvas.height = H
     const ctx = canvas.getContext('2d')
     if (!ctx) return resolve(null)
 
-    // 漸層底
-    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height)
-    grad.addColorStop(0, '#ffffff')
-    grad.addColorStop(1, color + '22')
-    ctx.fillStyle = grad
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+    // 各來源的主題色 / 標題 / 內文
+    const THEME: Record<EvidenceSourceType, { color: string; title: string; lines: string[] }> = {
+      self_payment: {
+        color: '#16a34a', title: '✓ 轉帳成功',
+        lines: ['已付 $500', 'TXN' + Date.now().toString().slice(-9)],
+      },
+      box_audit: {
+        color: '#d97706', title: '🪙 誠實商店盤點',
+        lines: ['投錢箱實收 $1,240', '帳面 $1,200 · 差 +$40', '運動飲料 ×18 罐'],
+      },
+      transfer: {
+        color: '#0e7490', title: '📦 調貨簽收單',
+        lines: ['Ace 2.0 → 球魔方 2.0', '護膝 ×6 件', '簽收人：王小明'],
+      },
+      captain_goal: {
+        color: '#7c3aed', title: '🎯 本週目標達成',
+        lines: ['冷門時段衝刺', '達成率 100%', '7 / 7 場已售出'],
+      },
+    }
+    const t = THEME[kind]
 
-    // 模擬轉帳收據外框
+    // 漸層底
+    const grad = ctx.createLinearGradient(0, 0, 0, H)
+    grad.addColorStop(0, '#ffffff')
+    grad.addColorStop(1, t.color + '22')
+    ctx.fillStyle = grad
+    ctx.fillRect(0, 0, W, H)
+
+    // 模擬收據 / 單據外框
     ctx.fillStyle = '#fff'
     ctx.fillRect(20, 30, 200, 260)
     ctx.strokeStyle = '#e8e6e0'
@@ -285,21 +321,22 @@ function makeSamplePngBlob(label: string, color: string): Promise<Blob | null> {
     ctx.strokeRect(20, 30, 200, 260)
 
     // 標題
-    ctx.fillStyle = color
-    ctx.font = 'bold 18px sans-serif'
+    ctx.fillStyle = t.color
+    ctx.font = 'bold 17px sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText('✓ 轉帳成功', 120, 70)
+    ctx.fillText(t.title, 120, 68)
 
-    // 內容
+    // 分隔線
+    ctx.strokeStyle = t.color + '55'
+    ctx.beginPath()
+    ctx.moveTo(40, 82)
+    ctx.lineTo(200, 82)
+    ctx.stroke()
+
+    // 內文（依來源）
     ctx.fillStyle = '#444'
-    ctx.font = '14px sans-serif'
-    ctx.fillText(label, 120, 130)
-
-    // 假交易序號
-    ctx.fillStyle = '#888'
-    ctx.font = '11px ui-monospace, monospace'
-    const fakeTxnId = 'TXN' + Date.now().toString().slice(-9)
-    ctx.fillText(fakeTxnId, 120, 170)
+    ctx.font = '13px sans-serif'
+    t.lines.forEach((ln, i) => ctx.fillText(ln, 120, 112 + i * 26))
 
     // 假時間
     ctx.fillStyle = '#aaa'
@@ -307,7 +344,7 @@ function makeSamplePngBlob(label: string, color: string): Promise<Blob | null> {
     const now = new Date()
     ctx.fillText(
       `${now.getMonth() + 1}/${now.getDate()} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`,
-      120, 200,
+      120, 250,
     )
 
     // 浮水印

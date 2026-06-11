@@ -31,15 +31,21 @@ export type PageKey =
   | 'reconciliation'
   | 'captains'
   | 'finance/payments'
-  | 'performance'
   | 'audit'
   | 'integrations'
+  // 階段 21 M4：員工薪資（取代舊「館長績效」入口；薪資依管理規章計算）
+  | 'staff-pay'
   // 階段 8：上傳憑證 admin 列表
   | 'evidence'
   // 階段 10：退費鏈（cancelSession 後的「待退費」+「退費歷史」）
   | 'finance/refunds'
   // 階段 12：報名熱度看板（按館 × 按日聚合的未來兩週狀態）
   | 'booking-overview'
+  // 階段 16：館長週目標 + 通知收件匣
+  | 'goals'
+  | 'notifications'
+  // 階段 17：線上商城後台訂單管理
+  | 'orders'
 
 export const PAGE_LABEL: Record<PageKey, string> = {
   'dashboard':        '總覽',
@@ -52,12 +58,15 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'reconciliation':   '對帳系統',
   'captains':         '主揪管理',
   'finance/payments': '報表匯出',
-  'performance':      '館長績效',
+  'staff-pay':        '員工薪資',
   'audit':            '操作紀錄',
   'integrations':     '整合設定',
   'evidence':         '上傳憑證',
   'finance/refunds':  '退費處理',
   'booking-overview': '報名熱度',
+  'goals':            '館長目標',
+  'notifications':    '通知',
+  'orders':           '商城訂單',
 }
 
 
@@ -106,7 +115,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'reconciliation':   { owner: 'full', manager: 'own_venue', staff: 'own_venue', none: 'denied' },
   'captains':         { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   'finance/payments': { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
-  'performance':      { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // 階段 21 M4：員工薪資 — 管理資訊，owner 全部、manager 自己館、staff 擋（沿用舊績效頁權限）
+  'staff-pay':        { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   'audit':            { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
   'integrations':     { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
   // 階段 8：上傳憑證列表 — 與 audit 同層級，owner 限定（檔內含敏感截圖）
@@ -115,6 +125,12 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'finance/refunds':  { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   // 階段 12：報名熱度看板（owner 看全部、manager 看自己館、staff 也可看 — 跟 sessions 同層）
   'booking-overview': { owner: 'full', manager: 'own_venue', staff: 'own_venue', none: 'denied' },
+  // 階段 16：館長目標 — owner 全部（指派 + 確認）、manager 自己館（完成 + 上傳）、staff 擋
+  'goals':            { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // 階段 16：通知收件匣 — owner / manager 各看自己的；staff 暫不發通知 → 擋
+  'notifications':    { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // 階段 17：商城訂單 — owner 看全部、manager 看自己館取貨單、staff 擋
+  'orders':           { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
 }
 
 
@@ -189,14 +205,17 @@ export function pathToPageKey(path: string): PageKey | null {
     ['finance/refunds',  '/finance/refunds'],
     ['booking-overview', '/booking-overview'],
     ['ai-summary',       '/ai-summary'],
+    ['notifications',    '/notifications'],
+    ['goals',            '/goals'],
+    ['orders',           '/orders'],
     ['dashboard',        '/dashboard'],
     ['sessions',         '/sessions'],
     ['checkin',          '/checkin'],
     ['customers',        '/customers'],
     ['products',         '/products'],
+    ['staff-pay',        '/reconciliation/staff-pay'],
     ['reconciliation',   '/reconciliation'],
     ['captains',         '/captains'],
-    ['performance',      '/performance'],
     ['audit',            '/audit'],
     ['integrations',     '/integrations'],
     ['finance',          '/finance'],

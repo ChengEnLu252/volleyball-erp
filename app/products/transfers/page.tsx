@@ -12,6 +12,7 @@ import {
   listVenues,
   listAllEvidence,
   getCurrentUser,
+  isConflictResult,
   type ProductTransferRow,
   type TransferSuggestion,
 } from '@/data/api'
@@ -388,8 +389,8 @@ function TransferActionButtons({
   function handleResult(r: { ok: true } | { ok: false; reason: string } | ConflictResult) {
     setBusy(false)
     if (r.ok) return
-    if ('conflict' in r && r.conflict) {
-      onConflict(r as ConflictResult)
+    if (isConflictResult(r)) {
+      onConflict(r)
       return
     }
     setErr(r.reason)

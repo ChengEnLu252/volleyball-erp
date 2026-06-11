@@ -5,9 +5,10 @@ import Link from 'next/link'
 import {
   getSession, listSessionRegistrations, listSessions,
   cancelSession, countPendingRefundsForSession,
-  getCurrentUser,
+  getCurrentUser, getEffectiveRole,
+  isConflictResult,
 } from '@/data/api'
-import { useStoreSync } from '@/data/store'
+import { useStoreSync, patchSessionFees } from '@/data/store'
 import { REGISTRATION_TYPE_LABEL } from '@/types'
 import type { ConflictResult } from '@/types'
 import ConflictBanner from '@/components/ConflictBanner'
@@ -98,6 +99,21 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
     if (session) setBaseUpdatedAt(session.updatedAt)
   }
 
+  // ── 階段 21 M3（Q1 應收）：費用編輯表單狀態 ──────────────
+  const [feeForm, setFeeForm] = useState<{ courtFee: string; acFee: string; acEnabled: boolean }>({
+    courtFee: '', acFee: '', acEnabled: false,
+  })
+  const [feeSaved, setFeeSaved] = useState(false)
+  // session 載入 / 切換 / 外部更新時，把表單同步成最新值
+  useEffect(() => {
+    if (!session) return
+    setFeeForm({
+      courtFee: String(session.courtFee),
+      acFee: String(session.acFee),
+      acEnabled: session.acEnabled,
+    })
+  }, [session?.id, session?.updatedAt])
+
   if (!session) {
     return <div style={{ padding: 24 }}>場次不存在。</div>
   }
@@ -111,6 +127,33 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
   // 可否取消：open / full 狀態才能取消；status='cancelled' / 'completed' 不行
   const canCancel = mounted && (session.status === 'open' || session.status === 'full')
   const currentUser = mounted ? getCurrentUser() : null
+
+  // ── 階段 21 M3（Q1 應收）：依表單即時計算兩種應收 ──────────
+  // 只有 owner / manager 能編輯費用；staff 看到唯讀版。
+  const canEditFees = mounted && currentUser
+    ? (getEffectiveRole(currentUser.id) === 'owner' || getEffectiveRole(currentUser.id) === 'manager')
+    : false
+  const activeRegs = registrations.filter(r => r.status !== 'cancelled')
+  const chargeableCount = activeRegs.filter(r => r.type === 'walk_in' || r.type === 'season_substitute').length
+  const allRegCount = activeRegs.length
+  const formCourtFee = Number(feeForm.courtFee.replace(/,/g, '')) || 0
+  const formAcFee = Number(feeForm.acFee.replace(/,/g, '')) || 0
+  const feePerHead = formCourtFee + (feeForm.acEnabled ? formAcFee : 0)
+  const grossExpected = feePerHead * allRegCount
+  const chargeableExpected = feePerHead * chargeableCount
+  const feeDirty =
+    formCourtFee !== session.courtFee ||
+    formAcFee !== session.acFee ||
+    feeForm.acEnabled !== session.acEnabled
+  const saveFees = () => {
+    patchSessionFees(session.id, {
+      courtFee: formCourtFee,
+      acFee: formAcFee,
+      acEnabled: feeForm.acEnabled,
+    })
+    setFeeSaved(true)
+    setTimeout(() => setFeeSaved(false), 2000)
+  }
 
   return (
     <div style={{ padding: 24 }}>
@@ -213,6 +256,101 @@ export default function SessionDetailPage({ params }: { params: Promise<{ id: st
           <Stat label="未付款"   value={`${unpaidCount} 人`} color={unpaidCount > 0 ? '#e85d3a' : '#059669'} />
           <Stat label="已收金額" value={`$${totalPaid.toLocaleString()}`} color="#2563eb" />
         </div>
+      </div>
+
+      {/* —— 階段 21 M3（Q1）：費用設定 + 即時應收 —— */}
+      <div style={{
+        background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0',
+        padding: '18px 24px', marginBottom: 16,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>費用設定 · 應收計算</div>
+          {!canEditFees && <span style={{ fontSize: 11, color: '#aaa' }}>（僅館長 / 老闆可編輯）</span>}
+        </div>
+
+        <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {/* 輸入區 */}
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <span style={{ fontSize: 11, color: '#888', fontWeight: 600 }}>場地費 / 人</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 14, color: '#888' }}>$</span>
+              <input
+                type="text" inputMode="numeric"
+                value={feeForm.courtFee}
+                disabled={!canEditFees}
+                onChange={e => setFeeForm(f => ({ ...f, courtFee: e.target.value.replace(/[^0-9]/g, '') }))}
+                style={{ width: 80, padding: '8px 10px', borderRadius: 8, border: '1px solid #e0ddd4', fontSize: 14, background: canEditFees ? '#fff' : '#f5f4f0' }}
+              />
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+            <span style={{ fontSize: 11, color: '#888', fontWeight: 600 }}>冷氣費 / 人</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 14, color: '#888' }}>$</span>
+              <input
+                type="text" inputMode="numeric"
+                value={feeForm.acFee}
+                disabled={!canEditFees}
+                onChange={e => setFeeForm(f => ({ ...f, acFee: e.target.value.replace(/[^0-9]/g, '') }))}
+                style={{ width: 80, padding: '8px 10px', borderRadius: 8, border: '1px solid #e0ddd4', fontSize: 14, background: canEditFees ? '#fff' : '#f5f4f0' }}
+              />
+            </div>
+          </label>
+
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 5, cursor: canEditFees ? 'pointer' : 'default' }}>
+            <span style={{ fontSize: 11, color: '#888', fontWeight: 600 }}>是否開冷氣</span>
+            <button
+              type="button"
+              disabled={!canEditFees}
+              onClick={() => canEditFees && setFeeForm(f => ({ ...f, acEnabled: !f.acEnabled }))}
+              style={{
+                padding: '8px 16px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                border: '1px solid', cursor: canEditFees ? 'pointer' : 'default',
+                borderColor: feeForm.acEnabled ? '#3b82f6' : '#e0ddd4',
+                background: feeForm.acEnabled ? '#eff6ff' : '#f5f4f0',
+                color: feeForm.acEnabled ? '#1e40af' : '#888',
+              }}>
+              {feeForm.acEnabled ? '❄ 已開' : '未開'}
+            </button>
+          </label>
+
+          {/* 即時應收（兩種都顯示）*/}
+          <div style={{ display: 'flex', gap: 10, marginLeft: 'auto', flexWrap: 'wrap' }}>
+            <div style={{ background: '#1a1917', color: '#fff', borderRadius: 10, padding: '10px 16px', minWidth: 130 }}>
+              <div style={{ fontSize: 10, color: '#d4a843', fontWeight: 700, letterSpacing: '.04em' }}>應收（只算臨打）</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>${chargeableExpected.toLocaleString()}</div>
+              <div style={{ fontSize: 10, color: '#aaa', marginTop: 2 }}>臨打+補位 {chargeableCount} 人 × ${feePerHead}</div>
+            </div>
+            <div style={{ background: '#f5f4f0', borderRadius: 10, padding: '10px 16px', minWidth: 130, border: '1px solid #e8e6e0' }}>
+              <div style={{ fontSize: 10, color: '#888', fontWeight: 700, letterSpacing: '.04em' }}>應收總額（全部報名）</div>
+              <div style={{ fontSize: 22, fontWeight: 800, marginTop: 2, color: '#1a1917' }}>${grossExpected.toLocaleString()}</div>
+              <div style={{ fontSize: 10, color: '#aaa', marginTop: 2 }}>全部 {allRegCount} 人 × ${feePerHead}</div>
+            </div>
+          </div>
+        </div>
+
+        {canEditFees && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+            <button
+              type="button"
+              onClick={saveFees}
+              disabled={!feeDirty}
+              style={{
+                padding: '9px 20px', borderRadius: 8, fontSize: 13, fontWeight: 700,
+                border: 'none', cursor: feeDirty ? 'pointer' : 'default',
+                background: feeDirty ? '#1a1917' : '#e8e6e0',
+                color: feeDirty ? '#d4a843' : '#aaa',
+              }}>
+              儲存費用設定
+            </button>
+            {feeSaved && <span style={{ fontSize: 13, color: '#059669', fontWeight: 600 }}>✓ 已儲存，應收已更新</span>}
+            {feeDirty && !feeSaved && <span style={{ fontSize: 12, color: '#9a3412' }}>● 尚未儲存的變更</span>}
+            <span style={{ fontSize: 11, color: '#aaa', marginLeft: 'auto' }}>
+              季打人員季初已繳費，不計入「只算臨打」應收
+            </span>
+          </div>
+        )}
       </div>
 
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0', overflow: 'hidden' }}>
@@ -361,8 +499,8 @@ function CancelSessionModal({
       baseUpdatedAt,
     })
     setSubmitting(false)
-    if ('conflict' in result && result.conflict) {
-      onConflict(result as ConflictResult)
+    if (isConflictResult(result)) {
+      onConflict(result)
       return
     }
     if (!result.ok) {

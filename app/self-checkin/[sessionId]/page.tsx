@@ -4,6 +4,7 @@ import { use, useEffect, useState } from 'react'
 import {
   getSelfCheckinSessionData,
   customerReportSelfPayment,
+  isConflictResult,
   type SelfCheckinSessionData,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
@@ -294,8 +295,8 @@ function SelfReportModal({
     setSubmitting(false)
     if (!result.ok) {
       // 樂觀鎖衝突 → ConflictBanner 接手，不關 modal
-      if ('conflict' in result && result.conflict) {
-        setConflict(result as ConflictResult)
+      if (isConflictResult(result)) {
+        setConflict(result)
         return
       }
       setErr(result.reason)

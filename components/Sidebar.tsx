@@ -8,10 +8,12 @@
 // ============================================================
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
   getCurrentUser, getEffectiveRole, getUserRoleLabel,
   listAccessiblePages, listAllUsers, login as apiLogin, logout as apiLogout,
+  getMyUnreadNotificationCount, getPendingOrderCount,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import type { PageKey } from '@/data/permissions'
@@ -27,31 +29,55 @@ function roleColor(userId: string): string {
   return COLORS.ink500
 }
 
+// —— 階段 21：側欄分類 ——
+// 把 19 個扁平項目歸成 5 大類，每類有標題；權限過濾後若整類為空則不顯示標題。
+type NavGroup = 'ops' | 'commerce' | 'finance' | 'people' | 'system'
+
+const GROUP_LABEL: Record<NavGroup, string> = {
+  ops:      '營運',
+  commerce: '商品 / 商城',
+  finance:  '財務 / 對帳',
+  people:   '人員 / 績效',
+  system:   '系統',
+}
+
+// 類別顯示順序（= sidebar 由上而下）
+const GROUP_ORDER: NavGroup[] = ['ops', 'commerce', 'finance', 'people', 'system']
+
 interface NavLink {
   pageKey: PageKey
   href: string
   label: string
   icon: string
+  group: NavGroup
 }
 
-// —— Nav 清單（順序 = sidebar 顯示順序）——
+// —— Nav 清單（順序 = sidebar 顯示順序；group = 所屬類別）——
 const ALL_LINKS: NavLink[] = [
-  { pageKey: 'dashboard',        href: '/dashboard',        label: '總覽',         icon: '▦'  },
-  { pageKey: 'ai-summary',       href: '/ai-summary',       label: 'AI 營運摘要', icon: '🤖' },
-  { pageKey: 'sessions',         href: '/sessions',         label: '場次管理',     icon: '📋' },
-  { pageKey: 'booking-overview', href: '/booking-overview', label: '報名熱度',     icon: '📈' },
-  { pageKey: 'checkin',          href: '/checkin',          label: '前台操作',     icon: '✓'  },
-  { pageKey: 'customers',        href: '/customers',        label: '客戶資料',     icon: '👤' },
-  { pageKey: 'products',         href: '/products',         label: '商品管理',     icon: '📦' },
-  { pageKey: 'finance',          href: '/finance',          label: '財務報表',     icon: '💰' },
-  { pageKey: 'performance',      href: '/performance',      label: '館長績效',     icon: '🏆' },
-  { pageKey: 'reconciliation',   href: '/reconciliation',   label: '對帳系統',     icon: '⚖️' },
-  { pageKey: 'captains',         href: '/captains',         label: '主揪管理',     icon: '🎯' },
-  { pageKey: 'finance/payments', href: '/finance/payments', label: '報表匯出',     icon: '📤' },
-  { pageKey: 'finance/refunds',  href: '/finance/refunds',  label: '退費處理',     icon: '💸' },
-  { pageKey: 'audit',            href: '/audit',            label: '操作紀錄',     icon: '🔍' },
-  { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證',     icon: '📎' },
-  { pageKey: 'integrations',     href: '/integrations',     label: '整合設定',     icon: '🔗' },
+  // 營運
+  { pageKey: 'dashboard',        href: '/dashboard',        label: '總覽',         icon: '▦',  group: 'ops' },
+  { pageKey: 'ai-summary',       href: '/ai-summary',       label: 'AI 營運摘要', icon: '🤖', group: 'ops' },
+  { pageKey: 'notifications',    href: '/notifications',    label: '通知',         icon: '🔔', group: 'ops' },
+  { pageKey: 'sessions',         href: '/sessions',         label: '場次管理',     icon: '📋', group: 'ops' },
+  { pageKey: 'booking-overview', href: '/booking-overview', label: '報名熱度',     icon: '📈', group: 'ops' },
+  { pageKey: 'checkin',          href: '/checkin',          label: '前台操作',     icon: '✓',  group: 'ops' },
+  { pageKey: 'customers',        href: '/customers',        label: '客戶資料',     icon: '👤', group: 'ops' },
+  // 商品 / 商城
+  { pageKey: 'products',         href: '/products',         label: '商品管理',     icon: '📦', group: 'commerce' },
+  { pageKey: 'orders',           href: '/orders',           label: '商城訂單',     icon: '🛒', group: 'commerce' },
+  // 財務 / 對帳
+  { pageKey: 'finance',          href: '/finance',          label: '財務報表',     icon: '💰', group: 'finance' },
+  { pageKey: 'reconciliation',   href: '/reconciliation',   label: '對帳系統',     icon: '⚖️', group: 'finance' },
+  { pageKey: 'finance/refunds',  href: '/finance/refunds',  label: '退費處理',     icon: '💸', group: 'finance' },
+  { pageKey: 'finance/payments', href: '/finance/payments', label: '報表匯出',     icon: '📤', group: 'finance' },
+  // 人員 / 績效
+  { pageKey: 'staff-pay',        href: '/reconciliation/staff-pay', label: '員工薪資',     icon: '🧑‍💼', group: 'people' },
+  { pageKey: 'goals',            href: '/goals',            label: '館長目標',     icon: '🎯', group: 'people' },
+  { pageKey: 'captains',         href: '/captains',         label: '主揪管理',     icon: '🪝', group: 'people' },
+  // 系統
+  { pageKey: 'audit',            href: '/audit',            label: '操作紀錄',     icon: '🔍', group: 'system' },
+  { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證',     icon: '📎', group: 'system' },
+  { pageKey: 'integrations',     href: '/integrations',     label: '整合設定',     icon: '🔗', group: 'system' },
 ]
 
 const BOOKING_LINKS = [
@@ -93,6 +119,11 @@ export default function Sidebar() {
     : new Set(ALL_LINKS.map(l => l.pageKey))
 
   const visibleLinks = ALL_LINKS.filter(l => accessibleSet.has(l.pageKey))
+
+  // 階段 16：未讀通知數（鈴鐺 badge）
+  const unreadCount = mounted && currentUser ? getMyUnreadNotificationCount() : 0
+  // 階段 17：待處理訂單數（商城訂單 badge）
+  const pendingOrders = mounted && currentUser ? getPendingOrderCount() : 0
 
   const requestSwitch = (userId: string) => {
     if (userId === currentUser?.id) {
@@ -138,51 +169,93 @@ export default function Sidebar() {
   const NavContent = () => (
     <div style={{ flex: 1, overflowY: 'auto', position: 'relative', zIndex: 1 }}>
       <nav style={{ padding: '12px 10px' }}>
-        {visibleLinks.map((link, idx) => {
-          const active = pathname === link.href
-          const num = String(idx + 1).padStart(2, '0')
-          return (
-            <a key={link.href} href={link.href} style={{
-              display: 'flex', alignItems: 'center', gap: 9,
-              padding: active ? '9px 10px' : '7px 10px',
-              borderRadius: 9, marginBottom: active ? 3 : 1,
-              color: active ? '#fff' : COLORS.ink700,
-              textDecoration: 'none',
-              fontSize: 12,
-              fontWeight: active ? 800 : 700,
-              background: active
-                ? `linear-gradient(95deg, ${COLORS.pink500} 0%, ${COLORS.pink400} 100%)`
-                : 'transparent',
-              boxShadow: active
-                ? '0 0 14px rgba(255,45,138,0.4), 0 4px 12px -2px rgba(255,45,138,0.45)'
-                : 'none',
-              position: 'relative',
-              animation: active ? 'vop-glow 2.6s ease-in-out infinite' : undefined,
-              transition: 'background 0.15s ease',
-            }}>
-              {active && (
-                <span style={{
-                  position: 'absolute', left: -1, top: 6, bottom: 6, width: 3,
-                  background: '#fff', borderRadius: 2,
-                  boxShadow: '0 0 8px rgba(255,255,255,0.8)',
-                }} />
-              )}
-              <span style={{
-                display: 'inline-flex', width: 14, justifyContent: 'center',
-                fontSize: 12,
-                color: active ? '#fff' : COLORS.pink700,
-              }}>{link.icon}</span>
-              <span>{link.label}</span>
-              <span className="vop-mono" style={{
-                marginLeft: 'auto',
-                fontSize: 9,
-                opacity: active ? 0.85 : 1,
-                color: active ? '#fff' : COLORS.ink200,
-                fontWeight: 700,
-              }}>{num}</span>
-            </a>
-          )
-        })}
+        {(() => {
+          // 全域連續編號（跨類別）— 與舊版一致
+          let globalIdx = 0
+          return GROUP_ORDER.map(group => {
+            const linksInGroup = visibleLinks.filter(l => l.group === group)
+            if (linksInGroup.length === 0) return null  // 整類被權限過濾掉 → 不顯示標題
+            return (
+              <div key={group} style={{ marginBottom: 6 }}>
+                {/* —— 類別標題 —— */}
+                <div className="vop-mono" style={{
+                  fontSize: 9, color: COLORS.pink700,
+                  fontWeight: 800, letterSpacing: '0.12em',
+                  padding: '8px 12px 4px',
+                }}>
+                  {GROUP_LABEL[group]}
+                </div>
+                {linksInGroup.map(link => {
+                  const active = pathname === link.href
+                  const num = String(++globalIdx).padStart(2, '0')
+                  const badgeCount =
+                    link.pageKey === 'notifications' ? unreadCount
+                    : link.pageKey === 'orders' ? pendingOrders
+                    : 0
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      prefetch
+                      onClick={() => setOpen(false)}
+                      className={`vop-navlink${active ? ' is-active' : ''}`}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 9,
+                        padding: active ? '9px 10px' : '7px 10px',
+                        borderRadius: 9, marginBottom: active ? 3 : 1,
+                        color: active ? '#fff' : COLORS.ink700,
+                        textDecoration: 'none',
+                        fontSize: 12,
+                        fontWeight: active ? 800 : 700,
+                        background: active
+                          ? `linear-gradient(95deg, ${COLORS.pink500} 0%, ${COLORS.pink400} 100%)`
+                          : 'transparent',
+                        boxShadow: active
+                          ? '0 0 14px rgba(255,45,138,0.4), 0 4px 12px -2px rgba(255,45,138,0.45)'
+                          : 'none',
+                        position: 'relative',
+                        animation: active ? 'vop-glow 2.6s ease-in-out infinite' : undefined,
+                      }}>
+                      {active && (
+                        <span style={{
+                          position: 'absolute', left: -1, top: 6, bottom: 6, width: 3,
+                          background: '#fff', borderRadius: 2,
+                          boxShadow: '0 0 8px rgba(255,255,255,0.8)',
+                        }} />
+                      )}
+                      <span style={{
+                        display: 'inline-flex', width: 14, justifyContent: 'center',
+                        fontSize: 12,
+                        color: active ? '#fff' : COLORS.pink700,
+                      }}>{link.icon}</span>
+                      <span>{link.label}</span>
+                      {badgeCount > 0 ? (
+                        <span style={{
+                          marginLeft: 'auto',
+                          minWidth: 16, height: 16, padding: '0 5px',
+                          display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                          borderRadius: 8,
+                          background: active ? '#fff' : COLORS.pink500,
+                          color: active ? COLORS.pink600 : '#fff',
+                          fontSize: 10, fontWeight: 800, lineHeight: 1,
+                          boxShadow: active ? 'none' : '0 0 8px rgba(255,45,138,0.5)',
+                        }}>{badgeCount > 99 ? '99+' : badgeCount}</span>
+                      ) : (
+                        <span className="vop-mono" style={{
+                          marginLeft: 'auto',
+                          fontSize: 9,
+                          opacity: active ? 0.85 : 1,
+                          color: active ? '#fff' : COLORS.ink200,
+                          fontWeight: 700,
+                        }}>{num}</span>
+                      )}
+                    </Link>
+                  )
+                })}
+              </div>
+            )
+          })
+        })()}
       </nav>
 
       <div style={{ padding: '0 10px 8px' }}>
@@ -214,6 +287,18 @@ export default function Sidebar() {
             </a>
           )
         })}
+        <a href="/shop" target="_blank" style={{
+          display: 'flex', alignItems: 'center', gap: 9,
+          padding: '6px 10px', borderRadius: 8, marginBottom: 1, marginTop: 2,
+          color: pathname.startsWith('/shop') ? COLORS.pink700 : COLORS.ink500,
+          textDecoration: 'none', fontSize: 11,
+          fontWeight: pathname.startsWith('/shop') ? 800 : 700,
+          background: pathname.startsWith('/shop') ? 'rgba(255,45,138,0.1)' : 'transparent',
+        }}>
+          <span style={{ width: 14, textAlign: 'center', fontSize: 11 }}>🛍️</span>
+          <span>線上商城</span>
+          <span style={{ marginLeft: 'auto', fontSize: 9, color: COLORS.ink200 }}>↗</span>
+        </a>
       </div>
     </div>
   )
@@ -403,6 +488,18 @@ export default function Sidebar() {
       )}
 
       <style>{`
+        .vop-navlink {
+          transition: background 0.12s ease, transform 0.06s ease, padding 0.1s ease;
+          -webkit-tap-highlight-color: transparent;
+          cursor: pointer;
+        }
+        .vop-navlink:not(.is-active):hover {
+          background: rgba(255,45,138,0.10) !important;
+        }
+        .vop-navlink:not(.is-active):active {
+          background: rgba(255,45,138,0.18) !important;
+          transform: scale(0.985);
+        }
         @media (max-width: 768px) {
           #sidebar { display: none !important; }
           #mobile-topbar { display: flex !important; }

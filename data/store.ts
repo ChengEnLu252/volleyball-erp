@@ -44,6 +44,17 @@ import type {
   Payment, RefundDecision,
   // 階段 12：addSession mutation
   Session,
+  // 階段 16：館長週目標 + 通知
+  WeeklyGoal, WeeklyGoalStatus, AppNotification,
+  // 階段 17：線上商城（訂單 + 商品庫存）
+  Order, OrderStatus, ShopProduct, ShopVariant,
+  // 階段 18：月記帳表（館長輸入 + 老闆對帳）
+  LedgerDay,
+  // 階段 19：員工薪資（工讀生時薪表 + 管理職薪資）
+  PartTimerPayrollSheet, PartTimerRow, ManagerSalaryRecord,
+  ReportSubmission,
+  // 階段 20 M2：採購/修繕簽核、零用金台帳、比賽企劃
+  ProcurementRequest, PettyCashEntry, CompetitionPlan,
 } from '@/types'
 
 // 階段 9：移除階段 6 留下的 type re-export。
@@ -68,6 +79,10 @@ const MUTABLE = GENERATED as unknown as {
   productTransactions: ProductTransaction[]  // 階段 5 加：誠實商店盤點 adjustment / 調貨 adjustment
   payments: Payment[]                         // 階段 10 加：退費鏈會 push negative Payment
   sessions: Session[]                          // 階段 12 加：新增場次 mutation 用
+  weeklyGoals: WeeklyGoal[]                    // 階段 16 加：館長週目標
+  notifications: AppNotification[]             // 階段 16 加：通知收件匣
+  shopProducts: ShopProduct[]                  // 階段 17 加：線上商城商品（onlineStock 會 mutate）
+  orders: Order[]                              // 階段 17 加：商城訂單
 }
 
 
@@ -90,6 +105,351 @@ const BOX_AUDITS: BoxAuditRecord[] = []
 
 export function getAllBoxAudits(): BoxAuditRecord[] {
   return BOX_AUDITS
+}
+
+/**
+ * 階段 18：in-memory 月記帳表陣列（種子空，由館長輸入累積）。
+ * 唯一鍵 `${venueId}:${date}`；upsert 語意（同鍵覆蓋）。
+ * 持久化透過 PersistedDiff.ledgerDaysUpserts。
+ */
+// 階段 20 M2-1 示範種子：球魔方(v1) 本月三筆問題記帳，分別觸發
+//   負帳未填($500) / 營收漏填($100) / 匯款金額不符($100)。
+// （v1 為「營收驟降」故事館，記帳品質不良與其營運危機呼應。）
+function seedLedger(
+  venueId: string, day: number,
+  partial: Partial<LedgerDay>,
+): LedgerDay {
+  const ym = payrollMonth()
+  const date = `${ym}-${String(day).padStart(2, '0')}`
+  return {
+    venueId, date,
+    slots: {},
+    merch: 0, snacks: 0, drinks: 0, ac: 0, other: 0,
+    seasonFee: 0, privatePrepay: 0, acFee: 0, refund: 0,
+    acDegrees: 0,
+    bookingNote: '', refundNote: '', merchNote: '',
+    reported: false,
+    updatedBy: 'u2', updatedAt: new Date().toISOString(),
+    ...partial,
+  }
+}
+
+const LEDGER_DAYS: LedgerDay[] = [
+  // 02 日：退款 -2,500 造成當日負帳，卻未填退款明細 → 負帳未填 $500
+  seedLedger('v1', 2, { refund: -2500, reported: true }),
+  // 03 日：館長按了「回報完畢」卻整日 0 元 → 營收漏填 $100
+  seedLedger('v1', 3, { reported: true }),
+  // 04 日：只記了一個時段 3,000 + 商品 500（遠少於系統當月場地費）
+  //        → 本月場地費記帳與系統不符 → 匯款金額不符 $100
+  seedLedger('v1', 4, { slots: { '19~20': 3000 }, merch: 500, reported: true }),
+]
+
+export function getAllLedgerDays(): LedgerDay[] {
+  return LEDGER_DAYS
+}
+
+/** 階段 18：組鍵 helper（store 內部 + api 共用語意） */
+function ledgerKey(venueId: string, date: string): string {
+  return `${venueId}:${date}`
+}
+
+
+/**
+ * 階段 19：工讀生時薪表（每館每月一張）。
+ * 唯一鍵 `${venueId}:${month}`；upsert 語意。
+ * 有種子（規章圖 13 人掛林口 v2 當前月）；persist 透過 PersistedDiff。
+ */
+function payrollMonth(): string {
+  return new Date().toISOString().slice(0, 7)
+}
+
+/** 階段 20 M2：N 天前的 ISO 時戳（種子用；負數 = 過去） */
+function nowIso(daysOffset = 0): string {
+  return new Date(Date.now() + daysOffset * 86400000).toISOString()
+}
+
+function seedPtRow(
+  id: string, name: string, level: PartTimerRow['level'], rate: number, hours: number,
+): PartTimerRow {
+  return { id, name, level, hourlyRate: rate, normalHours: hours, bonus: 0, penalty: 0, note: '' }
+}
+
+const PART_TIMER_SHEETS: PartTimerPayrollSheet[] = [{
+  venueId: 'v2',
+  month: payrollMonth(),
+  rows: [
+    seedPtRow('ptseed-1',  'Leo',      'captain_x2',     210, 26),
+    seedPtRow('ptseed-2',  '念恩',     'captain_x2',     210, 35),
+    seedPtRow('ptseed-3',  '徐敬',     'helper',         190, 6),
+    seedPtRow('ptseed-4',  '阿超',     'helper',         190, 1),
+    seedPtRow('ptseed-5',  '偉翔',     'senior_helper',  200, 1.5),
+    seedPtRow('ptseed-6',  '文',       'captain_helper', 195, 8),
+    seedPtRow('ptseed-7',  '威皓',     'helper',         190, 14),
+    seedPtRow('ptseed-8',  '品豪',     'captain_senior', 220, 16),
+    seedPtRow('ptseed-9',  '小菜',     'helper',         190, 2),
+    seedPtRow('ptseed-10', '星',       'senior_helper',  195, 0),
+    seedPtRow('ptseed-11', '甄',       'helper',         190, 9),
+    seedPtRow('ptseed-12', '馨柔',     'helper',         190, 1.5),
+    seedPtRow('ptseed-13', '(新)小馬', 'helper',         190, 1),
+  ],
+  revenueOverride: 284780,
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}, {
+  // 階段 21 M4 demo：球魔方 2.0（五股, v1）工讀生時薪示範
+  venueId: 'v1',
+  month: payrollMonth(),
+  rows: [
+    seedPtRow('ptseed-v1-1', '阿哲',   'captain_x2',     210, 30),
+    seedPtRow('ptseed-v1-2', '小昕',   'captain_senior', 220, 18),
+    seedPtRow('ptseed-v1-3', '冠廷',   'senior_helper',  200, 12),
+    seedPtRow('ptseed-v1-4', '宥任',   'helper',         190, 9),
+    seedPtRow('ptseed-v1-5', '雅婷',   'helper',         190, 5),
+    seedPtRow('ptseed-v1-6', '(新)柏宇','helper',        190, 2),
+  ],
+  revenueOverride: 198400,
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}]
+
+export function getAllPartTimerSheets(): PartTimerPayrollSheet[] {
+  return PART_TIMER_SHEETS
+}
+
+function partTimerKey(venueId: string, month: string): string {
+  return `${venueId}:${month}`
+}
+
+/**
+ * 階段 19：管理職薪資（每人每月一筆）。
+ * 唯一鍵 = record.id；有種子（林口館主示範一筆）。
+ */
+const MANAGER_SALARIES: ManagerSalaryRecord[] = [{
+  id: `v2:${payrollMonth()}:linkou-manager`,
+  venueId: 'v2',
+  month: payrollMonth(),
+  personName: '林口Ace 館主',
+  baseSalary: 35000,
+  designPay: 0,
+  bonuses: [{ id: 'mb-seed-1', label: '中秋獎金', amount: 0 }],
+  includeOffPeakBonus: true,
+  insuranceSelf: 0,
+  leaveDays: 2,
+  deductions: [],
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}, {
+  // 階段 21 M4 demo：球魔方 2.0（五股, v1）— 兼美編、本月營收較弱（呼應 v1 營收驟降故事）
+  id: `v1:${payrollMonth()}:wugu-manager`,
+  venueId: 'v1',
+  month: payrollMonth(),
+  personName: '五股 球魔方 館主',
+  baseSalary: 38000,
+  designPay: 3000,
+  bonuses: [{ id: 'mb-v1-1', label: '中秋獎金', amount: 6000 }],
+  includeOffPeakBonus: true,
+  insuranceSelf: 1357,
+  leaveDays: 1,
+  deductions: [],
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}, {
+  // 飛翼（v3）— 高營收館、無美編
+  id: `v3:${payrollMonth()}:feiyi-manager`,
+  venueId: 'v3',
+  month: payrollMonth(),
+  personName: '飛翼 館主',
+  baseSalary: 40000,
+  designPay: 0,
+  bonuses: [],
+  includeOffPeakBonus: true,
+  insuranceSelf: 1500,
+  leaveDays: 0,
+  deductions: [],
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}, {
+  // Hibi 日日（中壢, v4）
+  id: `v4:${payrollMonth()}:zhongli-manager`,
+  venueId: 'v4',
+  month: payrollMonth(),
+  personName: '中壢 Hibi 館主',
+  baseSalary: 36000,
+  designPay: 2500,
+  bonuses: [],
+  includeOffPeakBonus: true,
+  insuranceSelf: 1287,
+  leaveDays: 0,
+  deductions: [],
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}, {
+  // play one（八德, v5）— 含請假扣薪 + 一筆其他扣款示範
+  id: `v5:${payrollMonth()}:bade-manager`,
+  venueId: 'v5',
+  month: payrollMonth(),
+  personName: '八德 play one 館主',
+  baseSalary: 35000,
+  designPay: 0,
+  bonuses: [],
+  includeOffPeakBonus: true,
+  insuranceSelf: 1287,
+  leaveDays: 3,
+  deductions: [{ id: 'md-v5-1', label: '制服 / 雜支代扣', amount: 500 }],
+  updatedBy: 'u1',
+  updatedAt: '2026-01-01T00:00:00Z',
+}]
+
+export function getAllManagerSalaries(): ManagerSalaryRecord[] {
+  return MANAGER_SALARIES
+}
+
+/**
+ * 階段 20：報表繳交紀錄（每館每月每報表一筆）。
+ * 唯一鍵 = `${venueId}:${month}:${type}`；有種子（示範本月各館繳交狀況：含準時、遲交、未繳）。
+ */
+function reportKey(venueId: string, month: string, type: ReportSubmission['type']): string {
+  return `${venueId}:${month}:${type}`
+}
+
+function seedReport(venueId: string, type: ReportSubmission['type'], submittedDay: number | null): ReportSubmission {
+  const month = payrollMonth()
+  return { id: reportKey(venueId, month, type), venueId, month, type, submittedDay }
+}
+
+// 示範資料：林口準時、八德排班遲交、五股零用金未繳、內壢庫存遲交、新竹存款回報未繳…
+const REPORT_SUBMISSIONS: ReportSubmission[] = [
+  // v2 林口：全準時
+  seedReport('v2', 'parttime_wage', 2), seedReport('v2', 'petty_cash', 3), seedReport('v2', 'manager_salary', 4),
+  seedReport('v2', 'product_stock', 24), seedReport('v2', 'wage_receipt', 9), seedReport('v2', 'schedule', 23), seedReport('v2', 'cash_deposit', 1),
+  // v5 八德：排班遲交、其餘準時
+  seedReport('v5', 'parttime_wage', 3), seedReport('v5', 'petty_cash', 2), seedReport('v5', 'manager_salary', 5),
+  seedReport('v5', 'product_stock', 25), seedReport('v5', 'wage_receipt', 8), seedReport('v5', 'schedule', 28), seedReport('v5', 'cash_deposit', 1),
+  // v1 五股：零用金未繳、薪資明細遲交
+  seedReport('v1', 'parttime_wage', 6), seedReport('v1', 'petty_cash', null), seedReport('v1', 'manager_salary', 4),
+  seedReport('v1', 'product_stock', 23), seedReport('v1', 'wage_receipt', 10), seedReport('v1', 'schedule', 25), seedReport('v1', 'cash_deposit', 1),
+  // v4 內壢：庫存表遲交
+  seedReport('v4', 'parttime_wage', 2), seedReport('v4', 'petty_cash', 3), seedReport('v4', 'manager_salary', 5),
+  seedReport('v4', 'product_stock', 28), seedReport('v4', 'wage_receipt', 9), seedReport('v4', 'schedule', 24), seedReport('v4', 'cash_deposit', 1),
+  // v3 飛翼：薪資領取表未繳
+  seedReport('v3', 'parttime_wage', 3), seedReport('v3', 'petty_cash', 3), seedReport('v3', 'manager_salary', 4),
+  seedReport('v3', 'product_stock', 22), seedReport('v3', 'wage_receipt', null), seedReport('v3', 'schedule', 25), seedReport('v3', 'cash_deposit', 1),
+  // v6 新竹：存款回報未繳、館主薪資表遲交
+  seedReport('v6', 'parttime_wage', 3), seedReport('v6', 'petty_cash', 2), seedReport('v6', 'manager_salary', 8),
+  seedReport('v6', 'product_stock', 24), seedReport('v6', 'wage_receipt', 9), seedReport('v6', 'schedule', 23), seedReport('v6', 'cash_deposit', null),
+]
+
+export function getAllReportSubmissions(): ReportSubmission[] {
+  return REPORT_SUBMISSIONS
+}
+
+
+// ── 階段 20 M2-2：採購 / 修繕簽核 ───────────────────────────
+// 唯一鍵 = record.id；upsert 語意。種子涵蓋各簽核狀態與三個金額級距。
+const PROCUREMENT_REQUESTS: ProcurementRequest[] = [
+  {
+    id: 'pr-v2-001', venueId: 'v2', kind: 'purchase', title: '排球網×2 + 計分板',
+    amount: 1800, status: 'approved', requestedBy: 'u2', requestedAt: nowIso(-12),
+    approvedBy: 'u2', approvedAt: nowIso(-12), completionEvidenceRef: null, completedAt: null,
+    note: '館長自核（< $2,000）',
+  },
+  {
+    id: 'pr-v4-001', venueId: 'v4', kind: 'repair', title: '地板局部翻修',
+    amount: 4200, status: 'pending', requestedBy: 'u3', requestedAt: nowIso(-3),
+    approvedBy: null, approvedAt: null, completionEvidenceRef: null, completedAt: null,
+    note: '$2,000–5,000 需老闆核准',
+  },
+  {
+    id: 'pr-v1-001', venueId: 'v1', kind: 'repair', title: '中央空調壓縮機更換',
+    amount: 38000, status: 'approved', requestedBy: 'u2', requestedAt: nowIso(-20),
+    approvedBy: 'u1', approvedAt: nowIso(-18), completionEvidenceRef: null, completedAt: null,
+    note: '> $5,000：老闆已核准，待完工存證（完工照）',
+  },
+  {
+    id: 'pr-v5-001', venueId: 'v5', kind: 'purchase', title: '飲水機 + 製冰機',
+    amount: 9600, status: 'completed', requestedBy: 'u4', requestedAt: nowIso(-40),
+    approvedBy: 'u1', approvedAt: nowIso(-38), completionEvidenceRef: 'EVID-2024-0917',
+    completedAt: nowIso(-30), note: '> $5,000：已核准並完工存證',
+  },
+]
+export function getAllProcurementRequests(): ProcurementRequest[] {
+  return PROCUREMENT_REQUESTS
+}
+
+// ── 階段 20 M2-3：零用金台帳（年度 6 萬上限）────────────────
+// 唯一鍵 = record.id；新增語意（不覆蓋）。球魔方(v1) 故意超出 6 萬上限以示範扣年終。
+function seedPetty(
+  venueId: string, id: string, monthOffset: number, day: number,
+  category: PettyCashEntry['category'], label: string, amount: number,
+): PettyCashEntry {
+  const d = new Date()
+  const dt = new Date(d.getFullYear(), d.getMonth() - monthOffset, day)
+  return {
+    id, venueId,
+    date: `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`,
+    category, label, amount, enteredBy: venueId === 'v1' ? 'u2' : 'u3',
+    enteredAt: new Date().toISOString(), note: '',
+  }
+}
+const PETTY_CASH_ENTRIES: PettyCashEntry[] = [
+  // v1 球魔方：本年度累計約 6.5 萬 → 超過 6 萬上限 → 扣年終 5,000
+  seedPetty('v1', 'pc-v1-01', 5, 8,  '維護耗材', '球網繩、標誌桿', 8200),
+  seedPetty('v1', 'pc-v1-02', 4, 12, '清潔用品', '地板清潔劑、拖把', 6400),
+  seedPetty('v1', 'pc-v1-03', 3, 5,  '茶水',     '飲水機濾心 + 茶包', 5300),
+  seedPetty('v1', 'pc-v1-04', 2, 18, '維護耗材', '冷氣濾網更換', 12800),
+  seedPetty('v1', 'pc-v1-05', 1, 9,  '雜支',     '臨時搬運工資', 9900),
+  seedPetty('v1', 'pc-v1-06', 1, 22, '文具',     '報名表單、印章', 3700),
+  seedPetty('v1', 'pc-v1-07', 0, 3,  '維護耗材', '燈管更換一批', 11200),
+  seedPetty('v1', 'pc-v1-08', 0, 6,  '交通',     '調貨油資', 7600),
+  // v2 林口：年度約 2.3 萬，遠低於上限
+  seedPetty('v2', 'pc-v2-01', 3, 10, '清潔用品', '清潔用品補充', 4200),
+  seedPetty('v2', 'pc-v2-02', 2, 14, '茶水',     '茶水間補給', 3100),
+  seedPetty('v2', 'pc-v2-03', 1, 7,  '維護耗材', '小五金', 5600),
+  seedPetty('v2', 'pc-v2-04', 0, 4,  '文具',     '辦公文具', 2400),
+  // v4 內壢：年度約 1.8 萬
+  seedPetty('v4', 'pc-v4-01', 2, 9,  '清潔用品', '清潔用品', 3800),
+  seedPetty('v4', 'pc-v4-02', 1, 16, '茶水',     '飲水耗材', 2900),
+  seedPetty('v4', 'pc-v4-03', 0, 5,  '雜支',     '雜項補給', 4100),
+]
+export function getAllPettyCashEntries(): PettyCashEntry[] {
+  return PETTY_CASH_ENTRIES
+}
+
+// ── 階段 20 M2-4：比賽企劃追蹤 ──────────────────────────────
+// 唯一鍵 = record.id；新增語意。種子設計：v2/v5 達標(≥3)，v1 只 2 場(未達→扣3000)，
+// v4(內壢)+v6(新竹) 合計 3 場（< 合計門檻 4 → 兩館共扣）。
+function seedComp(
+  venueId: string, id: string, monthOffset: number, title: string,
+  status: CompetitionPlan['status'],
+): CompetitionPlan {
+  const d = new Date()
+  const dt = new Date(d.getFullYear(), d.getMonth() - monthOffset, 15)
+  return {
+    id, venueId, title,
+    date: `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-15`,
+    status, note: '', createdBy: venueId === 'v1' ? 'u2' : 'u3',
+    createdAt: new Date().toISOString(),
+  }
+}
+const COMPETITION_PLANS: CompetitionPlan[] = [
+  // v2 林口：3 場已舉辦 → 達標
+  seedComp('v2', 'cp-v2-01', 4, '春季友誼賽',     'done'),
+  seedComp('v2', 'cp-v2-02', 2, '館際對抗賽',     'done'),
+  seedComp('v2', 'cp-v2-03', 0, '夏季排球聯誼',   'done'),
+  // v5 play one：3 場（2 done + 1 規劃中，仍計入企劃數）→ 達標
+  seedComp('v5', 'cp-v5-01', 3, '社區排球日',     'done'),
+  seedComp('v5', 'cp-v5-02', 1, '親子排球體驗',   'done'),
+  seedComp('v5', 'cp-v5-03', 0, '中秋盃',         'planned'),
+  // v1 球魔方：只有 2 場 → 未達 3 → 扣年終 3,000
+  seedComp('v1', 'cp-v1-01', 3, '開幕紀念賽',     'done'),
+  seedComp('v1', 'cp-v1-02', 0, '會員盃',         'planned'),
+  // v4 內壢 + v6 新竹 合計門檻 4：目前 v4×2 + v6×1 = 3 < 4 → 兩館共扣
+  seedComp('v4', 'cp-v4-01', 2, '內壢友誼賽',     'done'),
+  seedComp('v4', 'cp-v4-02', 0, '新莊交流賽',     'planned'),
+  seedComp('v6', 'cp-v6-01', 1, '新竹city盃',     'done'),
+]
+export function getAllCompetitionPlans(): CompetitionPlan[] {
+  return COMPETITION_PLANS
 }
 
 
@@ -190,6 +550,90 @@ interface PersistedDiff {
    * hydrate 時把這些 push 進 MUTABLE.sessions（同一個陣列引用）。
    */
   sessionsAdded: Session[]
+
+  // ── 階段 21 M3（Q1 應收）：既有場次的費用 patch ──────────
+  /**
+   * 對既有 Session 的費用欄位 patch（館長在場次頁編輯）。
+   * key = sessionId，value = 要覆蓋的 courtFee / acFee / acEnabled。
+   * 種子場次在 GENERATED.sessions、階段 12+ 新增的在 sessionsAdded，
+   * 兩者皆可被此 patch 覆蓋；套用時同步重算該場 expectedRevenue。
+   */
+  sessionFeePatches: Record<string, {
+    courtFee?: number
+    acFee?: number
+    acEnabled?: boolean
+    updatedAt?: string
+  }>
+
+  // ── 階段 16：館長週目標 + 通知 ───────────────────────
+  /** 新增的週目標（老闆指派 / 館長自加）；種子在 GENERATED.weeklyGoals */
+  weeklyGoalsAdded: WeeklyGoal[]
+  /** 對既有週目標的欄位 patch（提交 / 確認 / 退回） */
+  weeklyGoalsPatches: Record<string, {
+    status?: WeeklyGoalStatus
+    evidenceId?: string | null
+    submittedBy?: string | null
+    submittedAt?: string | null
+    confirmedBy?: string | null
+    confirmedAt?: string | null
+    returnReason?: string | null
+    updatedAt?: string
+  }>
+  /** 新增的通知；種子在 GENERATED.notifications */
+  notificationsAdded: AppNotification[]
+  /** 對既有通知的 patch（目前只有 isRead） */
+  notificationsPatches: Record<string, { isRead?: boolean }>
+
+  // ── 階段 17：線上商城（訂單 + 商品庫存） ─────────────
+  /** 新增的訂單（線上自助 / 後台代客）；種子在 GENERATED.orders */
+  ordersAdded: Order[]
+  /** 對既有訂單的狀態 / 時間戳 patch（付款 / 完成 / 取消） */
+  ordersPatches: Record<string, {
+    status?: OrderStatus
+    paidAt?: string | null
+    fulfilledAt?: string | null
+    cancelledAt?: string | null
+    cancelReason?: string | null
+    updatedAt?: string
+  }>
+  /**
+   * 對商城商品的 patch（庫存 onlineStock / 上下架 isListed）。
+   * 商品本體 seed 在 GENERATED.shopProducts；這裡只記 runtime 變動。
+   */
+  shopProductsPatches: Record<string, {
+    onlineStock?: number
+    isListed?: boolean
+    unitPrice?: number
+    /** 規格庫存矩陣（有規格商品調庫存 / 下單扣補時整批覆蓋） */
+    variants?: ShopVariant[]
+    updatedAt?: string
+  }>
+
+  // ── 階段 18：月記帳表（館長輸入）─────────────────────
+  /**
+   * 月記帳表 upsert（館長輸入的每日記帳）。
+   * key = `${venueId}:${date}`，value = 整筆 LedgerDay（覆蓋語意）。
+   * 無 generator 種子；全部來自 runtime mutation。
+   */
+  ledgerDaysUpserts: Record<string, LedgerDay>
+
+  // ── 階段 19：員工薪資 ───────────────────────────────
+  /** 工讀生時薪表 upsert：key = `${venueId}:${month}`，value = 整張表 */
+  partTimerSheetsUpserts: Record<string, PartTimerPayrollSheet>
+  /** 管理職薪資 upsert：key = record.id，value = 整筆 */
+  managerSalariesUpserts: Record<string, ManagerSalaryRecord>
+
+  // ── 階段 20：報表繳交追蹤 ───────────────────────────
+  /** 報表繳交 upsert：key = `${venueId}:${month}:${type}`，value = 整筆 */
+  reportSubmissionsUpserts: Record<string, ReportSubmission>
+
+  // ── 階段 20 M2：採購簽核 / 零用金 / 比賽企劃（皆 key = record.id）──
+  /** 採購/修繕簽核 upsert：key = record.id */
+  procurementUpserts: Record<string, ProcurementRequest>
+  /** 零用金台帳 upsert：key = record.id */
+  pettyCashUpserts: Record<string, PettyCashEntry>
+  /** 比賽企劃 upsert：key = record.id */
+  competitionUpserts: Record<string, CompetitionPlan>
 }
 
 function emptyDiff(): PersistedDiff {
@@ -210,6 +654,21 @@ function emptyDiff(): PersistedDiff {
     evidenceMetadata: [],
     paymentsAdded: [],
     sessionsAdded: [],
+    sessionFeePatches: {},
+    weeklyGoalsAdded: [],
+    weeklyGoalsPatches: {},
+    notificationsAdded: [],
+    notificationsPatches: {},
+    ordersAdded: [],
+    ordersPatches: {},
+    shopProductsPatches: {},
+    ledgerDaysUpserts: {},
+    partTimerSheetsUpserts: {},
+    managerSalariesUpserts: {},
+    reportSubmissionsUpserts: {},
+    procurementUpserts: {},
+    pettyCashUpserts: {},
+    competitionUpserts: {},
   }
 }
 
@@ -385,6 +844,137 @@ function applyDiffToGenerated(d: PersistedDiff): void {
       existingSessionIds.add(s.id)
     }
   }
+
+  // ── 5k-2. (階段 21 M3) 既有場次費用 patch + 重算 expectedRevenue ──
+  // 套用後重算「應收（只算臨打）」= (walk_in + season_substitute 人數)
+  //   × (courtFee + (acEnabled ? acFee : 0))，讓所有讀 s.expectedRevenue 的
+  //   下游（venue 摘要 / AI 洞察 / 對帳）即時反映館長的費用編輯。
+  for (const [sid, patch] of Object.entries(d.sessionFeePatches)) {
+    const s = MUTABLE.sessions.find(x => x.id === sid)
+    if (!s) continue
+    if (patch.courtFee   !== undefined) s.courtFee   = patch.courtFee
+    if (patch.acFee      !== undefined) s.acFee      = patch.acFee
+    if (patch.acEnabled  !== undefined) s.acEnabled  = patch.acEnabled
+    if (patch.updatedAt  !== undefined) s.updatedAt  = patch.updatedAt
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const chargeable = MUTABLE.registrations.filter(
+      r => r.sessionId === s.id && r.status !== 'cancelled'
+        && (r.type === 'walk_in' || r.type === 'season_substitute'),
+    ).length
+    s.expectedRevenue = fee * chargeable
+  }
+
+  // ── 5h. 階段 16：週目標 — 新增 + patch ─────────────
+  // 種子在 GENERATED.weeklyGoals；runtime 建立的在 d.weeklyGoalsAdded。
+  const existingGoalIds = new Set(MUTABLE.weeklyGoals.map(g => g.id))
+  for (const g of d.weeklyGoalsAdded) {
+    if (!existingGoalIds.has(g.id)) {
+      MUTABLE.weeklyGoals.push(g)
+      existingGoalIds.add(g.id)
+    }
+  }
+  for (const [id, patch] of Object.entries(d.weeklyGoalsPatches)) {
+    const g = MUTABLE.weeklyGoals.find(x => x.id === id)
+    if (!g) continue
+    if (patch.status       !== undefined) g.status       = patch.status
+    if (patch.evidenceId   !== undefined) g.evidenceId   = patch.evidenceId
+    if (patch.submittedBy  !== undefined) g.submittedBy  = patch.submittedBy
+    if (patch.submittedAt  !== undefined) g.submittedAt  = patch.submittedAt
+    if (patch.confirmedBy  !== undefined) g.confirmedBy  = patch.confirmedBy
+    if (patch.confirmedAt  !== undefined) g.confirmedAt  = patch.confirmedAt
+    if (patch.returnReason !== undefined) g.returnReason = patch.returnReason
+    if (patch.updatedAt    !== undefined) g.updatedAt    = patch.updatedAt
+  }
+
+  // ── 5i. 階段 16：通知 — 新增 + patch（已讀） ────────
+  const existingNotifIds = new Set(MUTABLE.notifications.map(n => n.id))
+  for (const n of d.notificationsAdded) {
+    if (!existingNotifIds.has(n.id)) {
+      MUTABLE.notifications.push(n)
+      existingNotifIds.add(n.id)
+    }
+  }
+  for (const [id, patch] of Object.entries(d.notificationsPatches)) {
+    const n = MUTABLE.notifications.find(x => x.id === id)
+    if (!n) continue
+    if (patch.isRead !== undefined) n.isRead = patch.isRead
+  }
+
+  // ── 5j. 階段 17：商城訂單 — 新增 + patch ────────────
+  // 種子在 GENERATED.orders；runtime 建立的在 d.ordersAdded。
+  const existingOrderIds = new Set(MUTABLE.orders.map(o => o.id))
+  for (const o of d.ordersAdded) {
+    if (!existingOrderIds.has(o.id)) {
+      MUTABLE.orders.push(o)
+      existingOrderIds.add(o.id)
+    }
+  }
+  for (const [id, patch] of Object.entries(d.ordersPatches)) {
+    const o = MUTABLE.orders.find(x => x.id === id)
+    if (!o) continue
+    if (patch.status       !== undefined) o.status       = patch.status
+    if (patch.paidAt       !== undefined) o.paidAt       = patch.paidAt
+    if (patch.fulfilledAt  !== undefined) o.fulfilledAt  = patch.fulfilledAt
+    if (patch.cancelledAt  !== undefined) o.cancelledAt  = patch.cancelledAt
+    if (patch.cancelReason !== undefined) o.cancelReason = patch.cancelReason
+    if (patch.updatedAt    !== undefined) o.updatedAt    = patch.updatedAt
+  }
+
+  // ── 5k. 階段 17：商城商品庫存 — patch only（seed 在 GENERATED）──
+  for (const [id, patch] of Object.entries(d.shopProductsPatches)) {
+    const p = MUTABLE.shopProducts.find(x => x.id === id)
+    if (!p) continue
+    if (patch.onlineStock !== undefined) p.onlineStock = patch.onlineStock
+    if (patch.isListed    !== undefined) p.isListed    = patch.isListed
+    if (patch.unitPrice   !== undefined) p.unitPrice   = patch.unitPrice
+    if (patch.variants    !== undefined) p.variants    = patch.variants
+    if (patch.updatedAt   !== undefined) p.updatedAt   = patch.updatedAt
+  }
+
+  // ── 5l. 階段 18：月記帳表 — upsert into LEDGER_DAYS（無 generator 種子）──
+  // diff.ledgerDaysUpserts 是 `${venueId}:${date}` → LedgerDay 的整筆覆蓋。
+  // hydrate 時 replay：同鍵則覆蓋既有、否則 push。
+  for (const day of Object.values(d.ledgerDaysUpserts)) {
+    const idx = LEDGER_DAYS.findIndex(x => x.venueId === day.venueId && x.date === day.date)
+    if (idx >= 0) LEDGER_DAYS[idx] = day
+    else LEDGER_DAYS.push(day)
+  }
+
+  // ── 5m. 階段 19：員工薪資 — upsert into PART_TIMER_SHEETS / MANAGER_SALARIES ──
+  for (const sheet of Object.values(d.partTimerSheetsUpserts)) {
+    const idx = PART_TIMER_SHEETS.findIndex(x => x.venueId === sheet.venueId && x.month === sheet.month)
+    if (idx >= 0) PART_TIMER_SHEETS[idx] = sheet
+    else PART_TIMER_SHEETS.push(sheet)
+  }
+  for (const rec of Object.values(d.managerSalariesUpserts)) {
+    const idx = MANAGER_SALARIES.findIndex(x => x.id === rec.id)
+    if (idx >= 0) MANAGER_SALARIES[idx] = rec
+    else MANAGER_SALARIES.push(rec)
+  }
+
+  // ── 5n. 階段 20：報表繳交追蹤 — upsert into REPORT_SUBMISSIONS ──
+  for (const r of Object.values(d.reportSubmissionsUpserts)) {
+    const idx = REPORT_SUBMISSIONS.findIndex(x => x.id === r.id)
+    if (idx >= 0) REPORT_SUBMISSIONS[idx] = r
+    else REPORT_SUBMISSIONS.push(r)
+  }
+
+  // ── 5o. 階段 20 M2：採購簽核 / 零用金 / 比賽企劃（皆以 record.id upsert）──
+  for (const r of Object.values(d.procurementUpserts)) {
+    const idx = PROCUREMENT_REQUESTS.findIndex(x => x.id === r.id)
+    if (idx >= 0) PROCUREMENT_REQUESTS[idx] = r
+    else PROCUREMENT_REQUESTS.push(r)
+  }
+  for (const r of Object.values(d.pettyCashUpserts)) {
+    const idx = PETTY_CASH_ENTRIES.findIndex(x => x.id === r.id)
+    if (idx >= 0) PETTY_CASH_ENTRIES[idx] = r
+    else PETTY_CASH_ENTRIES.push(r)
+  }
+  for (const r of Object.values(d.competitionUpserts)) {
+    const idx = COMPETITION_PLANS.findIndex(x => x.id === r.id)
+    if (idx >= 0) COMPETITION_PLANS[idx] = r
+    else COMPETITION_PLANS.push(r)
+  }
 }
 
 function notify(): void {
@@ -498,6 +1088,27 @@ export function hydrateStore(): void {
       paymentsAdded: mainParsed?.paymentsAdded ?? [],
       // 階段 12：sessionsAdded（純從主 key 讀；無 legacy 來源；舊版本沒此欄位 → []）
       sessionsAdded: mainParsed?.sessionsAdded ?? [],
+      // 階段 21 M3：既有場次費用 patch（純從主 key 讀；舊版本沒此欄位 → {}）
+      sessionFeePatches: mainParsed?.sessionFeePatches ?? {},
+      // 階段 16：週目標 + 通知（純從主 key 讀；舊版本沒此欄位 → 預設空）
+      weeklyGoalsAdded:    mainParsed?.weeklyGoalsAdded    ?? [],
+      weeklyGoalsPatches:  mainParsed?.weeklyGoalsPatches  ?? {},
+      notificationsAdded:  mainParsed?.notificationsAdded  ?? [],
+      notificationsPatches: mainParsed?.notificationsPatches ?? {},
+      // 階段 17：商城訂單 + 商品庫存（純從主 key 讀；舊版本沒此欄位 → 預設空）
+      ordersAdded:         mainParsed?.ordersAdded         ?? [],
+      ordersPatches:       mainParsed?.ordersPatches       ?? {},
+      shopProductsPatches: mainParsed?.shopProductsPatches ?? {},
+      // 階段 18：月記帳表（純從主 key 讀；舊版本沒此欄位 → 預設空）
+      ledgerDaysUpserts:   mainParsed?.ledgerDaysUpserts   ?? {},
+      // 階段 19：員工薪資（純從主 key 讀；舊版本沒此欄位 → 預設空）
+      partTimerSheetsUpserts: mainParsed?.partTimerSheetsUpserts ?? {},
+      managerSalariesUpserts: mainParsed?.managerSalariesUpserts ?? {},
+      reportSubmissionsUpserts: mainParsed?.reportSubmissionsUpserts ?? {},
+      // 階段 20 M2（純從主 key 讀；舊版本沒此欄位 → 預設空）
+      procurementUpserts: mainParsed?.procurementUpserts ?? {},
+      pettyCashUpserts:   mainParsed?.pettyCashUpserts   ?? {},
+      competitionUpserts: mainParsed?.competitionUpserts ?? {},
     }
     applyDiffToGenerated(diff)
 
@@ -816,6 +1427,286 @@ export function addSession(session: Session): void {
   persist()
   notify()
 }
+
+/**
+ * 階段 21 M3（Q1 應收）：編輯既有場次的費用欄位（場地費 / 冷氣費 / 是否開冷氣）。
+ *
+ * 同時 mutate MUTABLE（讓本頁立即看到）+ 重算該場 expectedRevenue
+ * （只算臨打 = walk_in + season_substitute 人數 × (courtFee + acEnabled?acFee:0)）
+ * + 寫 diff（持久化）。種子場次與階段 12+ 新增場次皆可編輯。
+ */
+export function patchSessionFees(
+  sessionId: string,
+  patch: { courtFee?: number; acFee?: number; acEnabled?: boolean },
+): void {
+  const updatedAt = nowIso()
+  const s = MUTABLE.sessions.find(x => x.id === sessionId)
+  if (s) {
+    if (patch.courtFee  !== undefined) s.courtFee  = patch.courtFee
+    if (patch.acFee     !== undefined) s.acFee     = patch.acFee
+    if (patch.acEnabled !== undefined) s.acEnabled = patch.acEnabled
+    s.updatedAt = updatedAt
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const chargeable = MUTABLE.registrations.filter(
+      r => r.sessionId === s.id && r.status !== 'cancelled'
+        && (r.type === 'walk_in' || r.type === 'season_substitute'),
+    ).length
+    s.expectedRevenue = fee * chargeable
+  }
+  const prev = diff.sessionFeePatches[sessionId] ?? {}
+  diff.sessionFeePatches[sessionId] = { ...prev, ...patch, updatedAt }
+  persist()
+  notify()
+}
+
+// ============================================================
+// 9.7 Public：mutation primitives — 階段 16（館長週目標 + 通知）
+// ============================================================
+
+/** 新增一筆週目標（老闆指派 / 館長自加）。 */
+export function addWeeklyGoal(goal: WeeklyGoal): void {
+  MUTABLE.weeklyGoals.push(goal)
+  diff.weeklyGoalsAdded.push(goal)
+  persist()
+  notify()
+}
+
+/**
+ * Patch 既有週目標（提交 / 確認 / 退回都走這）。
+ * 同時 mutate MUTABLE（讓既有 read 立刻見到）+ 寫 diff（持久化）。
+ */
+export function patchWeeklyGoal(
+  id: string,
+  patch: {
+    status?: WeeklyGoalStatus
+    evidenceId?: string | null
+    submittedBy?: string | null
+    submittedAt?: string | null
+    confirmedBy?: string | null
+    confirmedAt?: string | null
+    returnReason?: string | null
+    updatedAt?: string
+  },
+): void {
+  const g = MUTABLE.weeklyGoals.find(x => x.id === id)
+  if (g) {
+    if (patch.status       !== undefined) g.status       = patch.status
+    if (patch.evidenceId   !== undefined) g.evidenceId   = patch.evidenceId
+    if (patch.submittedBy  !== undefined) g.submittedBy  = patch.submittedBy
+    if (patch.submittedAt  !== undefined) g.submittedAt  = patch.submittedAt
+    if (patch.confirmedBy  !== undefined) g.confirmedBy  = patch.confirmedBy
+    if (patch.confirmedAt  !== undefined) g.confirmedAt  = patch.confirmedAt
+    if (patch.returnReason !== undefined) g.returnReason = patch.returnReason
+    if (patch.updatedAt    !== undefined) g.updatedAt    = patch.updatedAt
+  }
+  const prev = diff.weeklyGoalsPatches[id] ?? {}
+  diff.weeklyGoalsPatches[id] = { ...prev, ...patch }
+  persist()
+  notify()
+}
+
+/** 新增一筆通知。 */
+export function addNotification(notif: AppNotification): void {
+  MUTABLE.notifications.push(notif)
+  diff.notificationsAdded.push(notif)
+  persist()
+  notify()
+}
+
+/** 標記某通知為已讀 / 未讀。 */
+export function patchNotificationRead(id: string, isRead: boolean): void {
+  const n = MUTABLE.notifications.find(x => x.id === id)
+  if (n) n.isRead = isRead
+  const prev = diff.notificationsPatches[id] ?? {}
+  diff.notificationsPatches[id] = { ...prev, isRead }
+  persist()
+  notify()
+}
+
+/** 取得目前全部週目標（read primitive；api.ts 包裝過濾用）。 */
+export function getAllWeeklyGoals(): WeeklyGoal[] {
+  return MUTABLE.weeklyGoals
+}
+
+/** 取得目前全部通知（read primitive；api.ts 包裝過濾用）。 */
+export function getAllNotifications(): AppNotification[] {
+  return MUTABLE.notifications
+}
+
+
+// ============================================================
+// 9.8 Public：mutation primitives — 階段 17（線上商城）
+// ============================================================
+
+/** 新增一筆商城訂單（線上自助 / 後台代客）。 */
+export function addOrder(order: Order): void {
+  MUTABLE.orders.push(order)
+  diff.ordersAdded.push(order)
+  persist()
+  notify()
+}
+
+/** Patch 既有訂單（付款 / 完成 / 取消都走這）。 */
+export function patchOrder(
+  id: string,
+  patch: {
+    status?: OrderStatus
+    paidAt?: string | null
+    fulfilledAt?: string | null
+    cancelledAt?: string | null
+    cancelReason?: string | null
+    updatedAt?: string
+  },
+): void {
+  const o = MUTABLE.orders.find(x => x.id === id)
+  if (o) {
+    if (patch.status       !== undefined) o.status       = patch.status
+    if (patch.paidAt       !== undefined) o.paidAt       = patch.paidAt
+    if (patch.fulfilledAt  !== undefined) o.fulfilledAt  = patch.fulfilledAt
+    if (patch.cancelledAt  !== undefined) o.cancelledAt  = patch.cancelledAt
+    if (patch.cancelReason !== undefined) o.cancelReason = patch.cancelReason
+    if (patch.updatedAt    !== undefined) o.updatedAt    = patch.updatedAt
+  }
+  const prev = diff.ordersPatches[id] ?? {}
+  diff.ordersPatches[id] = { ...prev, ...patch }
+  persist()
+  notify()
+}
+
+/** 取得目前全部訂單（read primitive；api.ts 包裝過濾用）。 */
+export function getAllOrders(): Order[] {
+  return MUTABLE.orders
+}
+
+/** Patch 商城商品（庫存 onlineStock / 上下架 isListed / 單價）。 */
+export function patchShopProduct(
+  id: string,
+  patch: {
+    onlineStock?: number
+    isListed?: boolean
+    unitPrice?: number
+    variants?: ShopVariant[]
+    updatedAt?: string
+  },
+): void {
+  const p = MUTABLE.shopProducts.find(x => x.id === id)
+  if (p) {
+    if (patch.onlineStock !== undefined) p.onlineStock = patch.onlineStock
+    if (patch.isListed    !== undefined) p.isListed    = patch.isListed
+    if (patch.unitPrice   !== undefined) p.unitPrice   = patch.unitPrice
+    if (patch.variants    !== undefined) p.variants    = patch.variants
+    if (patch.updatedAt   !== undefined) p.updatedAt   = patch.updatedAt
+  }
+  const prev = diff.shopProductsPatches[id] ?? {}
+  diff.shopProductsPatches[id] = { ...prev, ...patch }
+  persist()
+  notify()
+}
+
+/** 取得目前全部商城商品（read primitive；api.ts 包裝過濾用）。 */
+export function getAllShopProducts(): ShopProduct[] {
+  return MUTABLE.shopProducts
+}
+
+
+// ============================================================
+// 9.9 Public：mutation primitives — 階段 18（月記帳表）
+// ============================================================
+
+/**
+ * 新增 / 覆蓋一天的月記帳表（館長輸入）。
+ *
+ * upsert 語意：以 `${venueId}:${date}` 為鍵。同鍵覆蓋既有、否則新增。
+ * 同時 mutate in-memory LEDGER_DAYS（讓既有 read 立刻見到）+ 寫 diff（持久化）。
+ */
+export function upsertLedgerDay(day: LedgerDay): void {
+  const idx = LEDGER_DAYS.findIndex(x => x.venueId === day.venueId && x.date === day.date)
+  if (idx >= 0) LEDGER_DAYS[idx] = day
+  else LEDGER_DAYS.push(day)
+  diff.ledgerDaysUpserts[ledgerKey(day.venueId, day.date)] = day
+  persist()
+  notify()
+}
+
+
+/**
+ * 階段 19：新增 / 覆蓋一張工讀生時薪表（每館每月一張）。
+ * upsert 鍵 = `${venueId}:${month}`。
+ */
+export function upsertPartTimerSheet(sheet: PartTimerPayrollSheet): void {
+  const idx = PART_TIMER_SHEETS.findIndex(x => x.venueId === sheet.venueId && x.month === sheet.month)
+  if (idx >= 0) PART_TIMER_SHEETS[idx] = sheet
+  else PART_TIMER_SHEETS.push(sheet)
+  diff.partTimerSheetsUpserts[partTimerKey(sheet.venueId, sheet.month)] = sheet
+  persist()
+  notify()
+}
+
+/**
+ * 階段 19：新增 / 覆蓋一筆管理職薪資。
+ * upsert 鍵 = record.id。
+ */
+export function upsertManagerSalary(record: ManagerSalaryRecord): void {
+  const idx = MANAGER_SALARIES.findIndex(x => x.id === record.id)
+  if (idx >= 0) MANAGER_SALARIES[idx] = record
+  else MANAGER_SALARIES.push(record)
+  diff.managerSalariesUpserts[record.id] = record
+  persist()
+  notify()
+}
+
+/**
+ * 階段 20：新增 / 覆蓋一筆報表繳交紀錄。
+ * upsert 鍵 = `${venueId}:${month}:${type}`。
+ */
+export function upsertReportSubmission(record: ReportSubmission): void {
+  const idx = REPORT_SUBMISSIONS.findIndex(x => x.id === record.id)
+  if (idx >= 0) REPORT_SUBMISSIONS[idx] = record
+  else REPORT_SUBMISSIONS.push(record)
+  diff.reportSubmissionsUpserts[record.id] = record
+  persist()
+  notify()
+}
+
+/**
+ * 階段 20 M2：新增 / 覆蓋一筆採購·修繕簽核（核准、退回、完工皆走此 upsert）。
+ * upsert 鍵 = record.id。
+ */
+export function upsertProcurementRequest(record: ProcurementRequest): void {
+  const idx = PROCUREMENT_REQUESTS.findIndex(x => x.id === record.id)
+  if (idx >= 0) PROCUREMENT_REQUESTS[idx] = record
+  else PROCUREMENT_REQUESTS.push(record)
+  diff.procurementUpserts[record.id] = record
+  persist()
+  notify()
+}
+
+/**
+ * 階段 20 M2：新增 / 覆蓋一筆零用金支出。
+ * upsert 鍵 = record.id。
+ */
+export function upsertPettyCashEntry(record: PettyCashEntry): void {
+  const idx = PETTY_CASH_ENTRIES.findIndex(x => x.id === record.id)
+  if (idx >= 0) PETTY_CASH_ENTRIES[idx] = record
+  else PETTY_CASH_ENTRIES.push(record)
+  diff.pettyCashUpserts[record.id] = record
+  persist()
+  notify()
+}
+
+/**
+ * 階段 20 M2：新增 / 覆蓋一筆比賽企劃（含改狀態為已舉辦 / 取消）。
+ * upsert 鍵 = record.id。
+ */
+export function upsertCompetitionPlan(record: CompetitionPlan): void {
+  const idx = COMPETITION_PLANS.findIndex(x => x.id === record.id)
+  if (idx >= 0) COMPETITION_PLANS[idx] = record
+  else COMPETITION_PLANS.push(record)
+  diff.competitionUpserts[record.id] = record
+  persist()
+  notify()
+}
+
 
 /**
  * 標記 Registration 的退費決策（'refunded' / 'waived'，或 reset 為 null）。

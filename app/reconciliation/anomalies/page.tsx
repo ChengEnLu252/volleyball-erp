@@ -20,6 +20,9 @@ const TYPE_ICON: Record<ReconciliationAnomalyType, string> = {
   rental_unpaid:        '🎫',
   gift_excess:          '📦',
   self_report_mismatch: '🤖',
+  ledger_negative_balance: '📒',
+  ledger_revenue_omission: '🕳️',
+  ledger_deposit_mismatch: '🏦',
 }
 
 const SEVERITY_OPTIONS: { value: AnomalySeverity | 'all'; label: string }[] = [

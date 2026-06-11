@@ -1007,6 +1007,26 @@ export type AuditAction =
    * oldValues 包 { refundDecision:null, updatedAt: ... }
    */
   | 'WAIVE_REFUND'
+  // ── ✨ 階段 16 新增：館長週目標 ───────────────────
+  /** 建立週目標（老闆指派 or 館長自加） */
+  | 'CREATE_WEEKLY_GOAL'
+  /** 館長上傳完成截圖、提交週目標（assigned → submitted） */
+  | 'SUBMIT_WEEKLY_GOAL'
+  /** 老闆確認週目標完成（submitted → confirmed） */
+  | 'CONFIRM_WEEKLY_GOAL'
+  /** 老闆退回週目標（submitted → assigned，附理由） */
+  | 'RETURN_WEEKLY_GOAL'
+  // ── ✨ 階段 17 新增：線上商城訂單 ─────────────────
+  /** 建立商城訂單（線上自助 / 後台代客皆用此 action；扣 onlineStock） */
+  | 'CREATE_ORDER'
+  /** 標記訂單已付款（pending → paid；金流串接前由後台手動標記） */
+  | 'PAY_ORDER'
+  /** 標記訂單已完成（→ fulfilled，已出貨 / 已取貨） */
+  | 'FULFILL_ORDER'
+  /** 取消訂單（→ cancelled，回補 onlineStock） */
+  | 'CANCEL_ORDER'
+  /** 調整商城商品庫存 / 上下架（onlineStock / isListed） */
+  | 'ADJUST_SHOP_STOCK'
 
 /**
  * 操作者類型（階段 3 production 升級新增）
@@ -1233,12 +1253,14 @@ export interface RentalSlot {
  *   2. data/api.ts 的 uploadEvidence：補對應 sourceId → venue lookup 規則
  *   3. （可選）對應業務頁面接上 <EvidenceUpload> 元件
  */
-export type EvidenceSourceType = 'self_payment' | 'box_audit' | 'transfer'
+export type EvidenceSourceType = 'self_payment' | 'box_audit' | 'transfer' | 'captain_goal'
 
 export const EVIDENCE_SOURCE_LABEL: Record<EvidenceSourceType, string> = {
   self_payment: '自助回報轉帳',
   box_audit:    '盤點現場',
   transfer:     '調貨簽收',
+  // 階段 16：館長週目標完成截圖。sourceId = WeeklyGoal.id
+  captain_goal: '館長目標完成',
 }
 
 /**
@@ -1295,4 +1317,723 @@ export interface ConflictResult {
   currentUpdatedAt: Timestamp
   /** 修改者快照（從最後一筆此 entity 的 audit log 推出，可能 null）*/
   lastEditedBy?: string | null
+}
+
+
+// ============================================================
+// 階段 16 — 館長週目標 + 通知收件匣
+// ============================================================
+// 業務脈絡（館主需求）：
+//   每館每週都有一個「館長目標」(可能商品推銷 / 冷門場次推廣)。
+//   原本館長完成後截圖丟 LINE 群組給老闆看 → 改成系統內：
+//     1. 老闆指派目標給某館某週，或館長自己登記要做的事
+//     2. 館長完成後在系統上傳完成截圖 (走既有 EvidenceUpload)
+//     3. 提交後「自動通知老闆」(寫一筆 AppNotification 給 owner)
+//     4. 老闆在收件匣 / 目標頁確認 (或退回重做)
+//     5. 確認 / 退回會回頭通知該館館長
+//
+// 通知系統刻意做成「泛用收件匣」: type + recipientUserId + linkHref，
+// 之後 F3 對帳回報也能 push 通知 (新增 NotificationType member 即可)。
+// ============================================================
+
+/** 週目標狀態流 */
+export type WeeklyGoalStatus =
+  | 'assigned'   // 已指派 / 已建立，待館長完成
+  | 'submitted'  // 館長已上傳截圖，待老闆確認
+  | 'confirmed'  // 老闆已確認完成
+  | 'returned'   // 老闆退回 (附理由)，館長需重做後重新提交
+
+export const WEEKLY_GOAL_STATUS_LABEL: Record<WeeklyGoalStatus, string> = {
+  assigned:  '待完成',
+  submitted: '待確認',
+  confirmed: '已確認',
+  returned:  '已退回',
+}
+
+/** 週目標來源：誰建立的 */
+export type WeeklyGoalSource =
+  | 'owner_assigned'  // 老闆 (凱哥) 指派給該館
+  | 'manager_self'    // 館長自己登記要做的事
+
+export const WEEKLY_GOAL_SOURCE_LABEL: Record<WeeklyGoalSource, string> = {
+  owner_assigned: '老闆指派',
+  manager_self:   '館長自訂',
+}
+
+/**
+ * 館長週目標。
+ *
+ * 一館一週可以有多個目標 (老闆指派 + 館長自訂混合)。
+ * weekStart 用「該週週一」的 ISO date (YYYY-MM-DD) 當作週識別。
+ */
+export interface WeeklyGoal {
+  /** wg_xxx */
+  id: UUID
+  /** 所屬球館 */
+  venueId: UUID
+  /** 該週週一日期 (YYYY-MM-DD)，用於分週 */
+  weekStart: string
+  /** 目標說明 (純文字) */
+  description: string
+  /** 來源：老闆指派 or 館長自訂 */
+  source: WeeklyGoalSource
+  /** 建立者 User.id */
+  createdBy: UUID
+  /** 目前狀態 */
+  status: WeeklyGoalStatus
+  /** 完成截圖的 UploadedEvidence.id；尚未上傳為 null */
+  evidenceId: UUID | null
+  /** 提交者 User.id (館長)；尚未提交為 null */
+  submittedBy: UUID | null
+  /** 提交時間 ISO；尚未提交為 null */
+  submittedAt: Timestamp | null
+  /** 老闆確認者 User.id；尚未確認為 null */
+  confirmedBy: UUID | null
+  /** 確認時間 ISO；尚未確認為 null */
+  confirmedAt: Timestamp | null
+  /** 退回理由；未退回為 null */
+  returnReason: string | null
+  /** 建立時間 ISO */
+  createdAt: Timestamp
+  /** 最後更新時間 ISO (樂觀鎖 / 排序用) */
+  updatedAt: Timestamp
+}
+
+/**
+ * 通知類型。
+ *
+ * 階段 16 先有目標三種；之後 F3 對帳可加 'reconciliation_submitted' 等。
+ */
+export type NotificationType =
+  | 'goal_submitted'  // 館長提交完成截圖 → 通知老闆
+  | 'goal_confirmed'  // 老闆確認 → 通知館長
+  | 'goal_returned'   // 老闆退回 → 通知館長
+  // ── 階段 17 新增：線上商城 ───────────────────────
+  | 'order_placed'    // 顧客 / 後台下單 → 通知老闆（+ 取貨館館長）
+
+export const NOTIFICATION_TYPE_LABEL: Record<NotificationType, string> = {
+  goal_submitted: '目標待確認',
+  goal_confirmed: '目標已確認',
+  goal_returned:  '目標被退回',
+  order_placed:   '新訂單',
+}
+
+/**
+ * 應用內通知 (收件匣的一筆)。
+ *
+ * 設計成泛用：recipientUserId 指定收件人 (老闆 / 某館長)，
+ * linkHref 點擊跳轉，relatedType/relatedId 串回業務實體。
+ * blob / 截圖不在這 — 透過 linkHref 導到對應頁面看。
+ */
+export interface AppNotification {
+  /** ntf_xxx */
+  id: UUID
+  /** 通知類型 */
+  type: NotificationType
+  /** 收件人 User.id */
+  recipientUserId: UUID
+  /** 標題 (列表粗體) */
+  title: string
+  /** 內文 (一兩句說明) */
+  body: string
+  /** 點擊跳轉路徑；null = 不可點 */
+  linkHref: string | null
+  /** 關聯實體類型 (例：'WeeklyGoal')；null = 無 */
+  relatedType: string | null
+  /** 關聯實體 id；null = 無 */
+  relatedId: UUID | null
+  /** 是否已讀 */
+  isRead: boolean
+  /** 建立時間 ISO */
+  createdAt: Timestamp
+}
+
+
+// ============================================================
+// 階段 17：線上商城（ShopProduct + Order）
+// ============================================================
+// 設計決策（用戶確認，勿改）：
+//   1. 商城是「單一統合商城」，不分館呈現一份目錄。
+//   2. 庫存用「獨立的線上商城庫存池」(onlineStock)，與各館 venueProducts 完全分開。
+//   3. 取貨支援「到館自取」與「宅配寄送」兩種，顧客結帳時選。
+//   4. 金流之後要串真實金流 → 先預留 paymentChannel 欄位；目前 paidAt 由後台手動標記。
+//   5. 商城公開頁在 /shop（走 ChromeShell 白名單，無 ERP 登入閘門），
+//      後台訂單管理在 /orders（owner 全部、manager 自己館取貨單、staff 擋）。
+//   6. 下單不強制 LINE 登入，沿用「以電話識別顧客」慣例，只填姓名 + 電話。
+// ============================================================
+
+/** 商城商品分類 */
+export type ShopCategory = 'drink' | 'gear' | 'apparel' | 'accessory'
+
+export const SHOP_CATEGORY_LABEL: Record<ShopCategory, string> = {
+  drink:     '飲品補給',
+  gear:      '護具裝備',
+  apparel:   '服飾',
+  accessory: '配件',
+}
+
+/** 商品顏色選項（顏色名 + 色票 hex，供前台 swatch 顯示） */
+export interface ShopColor {
+  /** 顏色名稱，例：'純白'、'墨黑'、'櫻花粉' */
+  name: string
+  /** 色票顏色 hex（白色等淺色前台會自動加描邊） */
+  hex: string
+}
+
+/**
+ * 商品規格（尺寸 × 顏色的單一組合），每個組合各自有獨立庫存。
+ *
+ * - 無尺寸軸的商品 size 為 null；無顏色軸的 color 為 null。
+ * - 同時無尺寸也無顏色 → 此商品 variants 為空陣列，庫存改用 onlineStock。
+ */
+export interface ShopVariant {
+  /** 尺寸，例：'M'、'EU 42'；無尺寸軸則 null */
+  size: string | null
+  /** 顏色名（對應 ShopProduct.colors[].name）；無顏色軸則 null */
+  color: string | null
+  /** 此規格的線上庫存 */
+  stock: number
+}
+
+/**
+ * 線上商城商品。
+ *
+ * 與各館實體庫存 (venueProducts) **完全分開**：商城有自己的庫存池。
+ *
+ * 庫存兩種模式：
+ *   - 無規格商品（variants 為空）：庫存就是 onlineStock。
+ *   - 有規格商品（variants 非空）：權威庫存在 variants[].stock；
+ *     onlineStock 維持為「所有規格庫存加總」，方便既有列表 / 徽章沿用。
+ *
+ * 圖片：imageUrl 有值用實拍照；為 null 時前台用品牌風格佔位圖（ProductImage 元件）。
+ */
+export interface ShopProduct {
+  /** shop_xxx */
+  id: UUID
+  /** 商品名稱 */
+  name: string
+  /** 分類 */
+  category: ShopCategory
+  /** 單價（元；同商品各規格同價） */
+  unitPrice: number
+  /** 線上商城庫存。有規格時 = 各規格庫存加總（自動同步維護） */
+  onlineStock: number
+  /** 是否上架中（false = 下架，前台不顯示，但後台仍可見） */
+  isListed: boolean
+  /** 商品說明（純文字） */
+  description: string
+  /** 卡片佔位用 emoji（佔位圖內的輔助視覺 / fallback） */
+  emoji: string
+  /** 真實商品圖網址；null = 用品牌佔位圖。之後上傳實拍照填這裡（例 '/shop/jersey.jpg'） */
+  imageUrl: string | null
+  /** 可選尺寸（空陣列 = 無尺寸軸） */
+  sizes: string[]
+  /** 可選顏色（空陣列 = 無顏色軸） */
+  colors: ShopColor[]
+  /** 規格庫存矩陣（空陣列 = 無規格，庫存用 onlineStock） */
+  variants: ShopVariant[]
+  /** 對應系統內 Product.id（由現有商品整併而來時填）；無則 null */
+  sourceProductId: UUID | null
+  /** 建立時間 ISO */
+  createdAt: Timestamp
+  /** 最後更新時間 ISO（樂觀鎖 / 排序用） */
+  updatedAt: Timestamp
+}
+
+/** 取貨 / 配送方式 */
+export type FulfillmentType = 'pickup' | 'shipping'
+
+export const FULFILLMENT_LABEL: Record<FulfillmentType, string> = {
+  pickup:   '到館自取',
+  shipping: '宅配寄送',
+}
+
+/** 訂單來源通路 */
+export type OrderChannel = 'online' | 'backend'
+
+export const ORDER_CHANNEL_LABEL: Record<OrderChannel, string> = {
+  online:  '線上商城',
+  backend: '後台代客',
+}
+
+/**
+ * 訂單狀態流：pending → paid → fulfilled，另有 cancelled 終態。
+ *   - pending   下單成立、待付款 / 待處理
+ *   - paid      已付款（金流串接前由後台手動標記）
+ *   - fulfilled 已出貨 / 已取貨完成
+ *   - cancelled 已取消（回補 onlineStock）
+ */
+export type OrderStatus = 'pending' | 'paid' | 'fulfilled' | 'cancelled'
+
+export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
+  pending:   '待處理',
+  paid:      '已付款',
+  fulfilled: '已完成',
+  cancelled: '已取消',
+}
+
+/**
+ * 付款方式 — 金流串接前的「預計付款方式」預留欄位。
+ * 未來串真實金流時，online_gateway 會由 webhook 回拋付款結果。
+ */
+export type PaymentChannel = 'cash_on_pickup' | 'cash_on_delivery' | 'online_gateway'
+
+export const PAYMENT_CHANNEL_LABEL: Record<PaymentChannel, string> = {
+  cash_on_pickup:   '到館付款',
+  cash_on_delivery: '貨到付款',
+  online_gateway:   '線上金流（待串接）',
+}
+
+/** 訂單明細行（內嵌於 Order；下單當下對價格 / 名稱 / 規格做快照） */
+export interface OrderItem {
+  /** ShopProduct.id */
+  productId: UUID
+  /** 下單當下的商品名稱快照 */
+  name: string
+  /** 下單當下的單價快照 */
+  unitPrice: number
+  /** 數量 */
+  quantity: number
+  /** 小計 = unitPrice * quantity */
+  subtotal: number
+  /** 規格：尺寸快照（無尺寸軸或舊單為 null / undefined） */
+  size?: string | null
+  /** 規格：顏色快照（無顏色軸或舊單為 null / undefined） */
+  color?: string | null
+}
+
+/** 宅配收件資訊（fulfillment='shipping' 時填） */
+export interface ShippingInfo {
+  recipient: string
+  phone: string
+  address: string
+}
+
+/**
+ * 商城訂單。
+ *
+ * in-memory 持久化（透過 PersistedDiff），demo 種子有幾筆示範單。
+ * 金流：paymentChannel 記錄「預計付款方式」；paidAt 由後台手動標記，
+ * 未來串真實金流時把 markOrderPaid 改成 webhook 回拋即可。
+ */
+export interface Order {
+  /** ord_xxx */
+  id: UUID
+  /** 人類可讀單號 SH-YYYYMMDD-XXXX */
+  orderNo: string
+  /** 來源通路 */
+  channel: OrderChannel
+  /** 買家姓名 */
+  customerName: string
+  /** 買家電話（以電話識別顧客） */
+  customerPhone: string
+  /** 買家 email，可空 */
+  customerEmail: string | null
+  /** 後台代客下單時的操作員 User.id；線上自助為 null */
+  placedByUserId: UUID | null
+  /** 訂單明細 */
+  items: OrderItem[]
+  /** 商品小計加總 */
+  itemTotal: number
+  /** 運費（pickup 為 0） */
+  shippingFee: number
+  /** 應付總額 = itemTotal + shippingFee */
+  total: number
+  /** 取貨 / 配送方式 */
+  fulfillment: FulfillmentType
+  /** pickup 時的取貨球館；shipping 為 null */
+  pickupVenueId: UUID | null
+  /** shipping 時的收件資訊；pickup 為 null */
+  shipping: ShippingInfo | null
+  /** 預計付款方式 */
+  paymentChannel: PaymentChannel
+  /** 目前狀態 */
+  status: OrderStatus
+  /** 顧客備註 */
+  notes: string | null
+  /** 付款時間 ISO；未付款為 null */
+  paidAt: Timestamp | null
+  /** 完成時間 ISO；未完成為 null */
+  fulfilledAt: Timestamp | null
+  /** 取消時間 ISO；未取消為 null */
+  cancelledAt: Timestamp | null
+  /** 取消理由；未取消為 null */
+  cancelReason: string | null
+  /** 建立時間 ISO */
+  createdAt: Timestamp
+  /** 最後更新時間 ISO（樂觀鎖 / 排序用） */
+  updatedAt: Timestamp
+}
+
+
+// ============================================================
+// 階段 18：月記帳表（館長輸入 + 老闆對帳）
+// ============================================================
+// 來源：客戶現行的「多爾森健康有限公司記帳表」Excel（每館每月一張）。
+// 設計：每天一筆 LedgerDay（venueId + date 唯一）。館長用「每日引導式
+//       表單」輸入；小計 / 總計 / 場地費加總 / 冷門 / 冷氣試算皆為衍生
+//       計算（見 data/ledger.ts），不存。
+//
+// 持久化：沿用 PersistedDiff（localStorage diff），不進 generator 種子。
+// 對帳：data/ledger.ts 的 getLedgerReconciliation 把館長數字與系統既有
+//       資料（場次 / 收款 / 商品 / 誠實商店 / 季租）自動比對找差異。
+// ============================================================
+
+/**
+ * 單一時段的場地費值。
+ * - number：該時段收到的場地費金額
+ * - string：非金額註記（例：「包場」「季租」），不計入場地費加總
+ * - 缺值（undefined）：該時段沒有資料
+ */
+export type LedgerSlotValue = number | string
+
+/**
+ * 月記帳表的「一天」。對應 Excel 一個日期欄（直行）。
+ *
+ * 唯一鍵：`${venueId}:${date}`。
+ */
+export interface LedgerDay {
+  /** 所屬球館 */
+  venueId: UUID
+  /** 日期 YYYY-MM-DD */
+  date: string
+
+  // ── 場地費：各時段（Excel 列 8-9 ~ 24-01）─────────────
+  /** key = 時段 key（見 data/ledger.ts LEDGER_SLOTS），value = 金額或註記 */
+  slots: Record<string, LedgerSlotValue>
+
+  // ── 銷售類別（Excel 商品 / 零食 / 飲料 / 冷氣 / 其他）──
+  /** 商品（球衣、襪子等銷售） */
+  merch: number
+  /** 零食 */
+  snacks: number
+  /** 飲料 */
+  drinks: number
+  /** 冷氣（類別列；與下方「冷氣費」不同列，忠實保留兩者） */
+  ac: number
+  /** 其他 */
+  other: number
+
+  // ── 收費 / 退款（Excel 季打收費 / 包場預付 / 冷氣費 / 退款）─
+  /** 季打收費 */
+  seasonFee: number
+  /** 包場預付 */
+  privatePrepay: number
+  /** 冷氣費 */
+  acFee: number
+  /** 退款（可為負） */
+  refund: number
+
+  // ── 冷氣度數（Excel 右側每日彙總的唯一人工輸入欄）────
+  /** 當日冷氣度數（kWh）；冷氣試算 = 度數 × 單價（見 LEDGER_AC_RATE） */
+  acDegrees: number
+
+  // ── 文字明細（Excel 包場季打明細 / 退款明細 / 商品明細）─
+  /** 包場、季打收費明細 */
+  bookingNote: string
+  /** 退款明細 */
+  refundNote: string
+  /** 商品明細 */
+  merchNote: string
+
+  // ── 流程狀態 ───────────────────────────────────────
+  /** 回報完畢（Excel 右側「回報完畢」TRUE/FALSE）；館長按下表示當日已填妥 */
+  reported: boolean
+
+  /** 最後編輯者（User.id） */
+  updatedBy: UUID
+  /** 最後編輯時間 ISO */
+  updatedAt: Timestamp
+}
+
+
+// ════════════════════════════════════════════════════════════
+// 階段 19：員工薪資計算
+//   - 工讀生時薪表（每館每月一張；正常薪水 = 時數 × 時薪）
+//   - 管理職薪資（每人每月一筆；本職 + 美編 + 獎金 − 勞健保 − 請假）
+//   - 規章常數：冷門場次獎金/罰則、年終獎金級距（見 data/payroll.ts）
+// ════════════════════════════════════════════════════════════
+
+/** 工讀生等級 */
+export type StaffLevel =
+  | 'helper'          // 小幫手
+  | 'captain_helper'  // 主揪小幫手
+  | 'senior_helper'   // 資深小幫手
+  | 'captain_senior'  // 主揪資深小幫手
+  | 'captain_x2'      // 主揪*2小幫手
+
+export const STAFF_LEVEL_LABEL: Record<StaffLevel, string> = {
+  helper:         '小幫手',
+  captain_helper: '主揪小幫手',
+  senior_helper:  '資深小幫手',
+  captain_senior: '主揪資深小幫手',
+  captain_x2:     '主揪*2小幫手',
+}
+
+/**
+ * 各等級「預設」時薪（元 / 時）。
+ * ⚠️ 僅為預設值：個別員工的 PartTimerRow.hourlyRate 可覆寫
+ *    （規章圖中資深小幫手同時出現 200 與 195，故時薪以「每人」為準）。
+ */
+export const STAFF_LEVEL_DEFAULT_RATE: Record<StaffLevel, number> = {
+  helper:         190,
+  captain_helper: 195,
+  senior_helper:  200,
+  captain_senior: 220,
+  captain_x2:     210,
+}
+
+/** 工讀生薪資表的一列 */
+export interface PartTimerRow {
+  /** 穩定 row id */
+  id: string
+  /** 姓名 */
+  name: string
+  /** 等級 */
+  level: StaffLevel
+  /** 此列實際時薪（建立時帶等級預設，可個別覆寫） */
+  hourlyRate: number
+  /** 正常時數 */
+  normalHours: number
+  /** 獎金（手動，正數） */
+  bonus: number
+  /** 罰款（手動，正數） */
+  penalty: number
+  /** 備註 */
+  note: string
+}
+
+/** 工讀生薪資表 — 每館每月一張（venue-scoped，比照記帳表持久化模式） */
+export interface PartTimerPayrollSheet {
+  /** 所屬球館 */
+  venueId: UUID
+  /** 月份 YYYY-MM */
+  month: string
+  /** 工讀生列 */
+  rows: PartTimerRow[]
+  /**
+   * 本月營收（人工覆寫）。
+   * null = 用系統值（getSystemMonthlyVenueRevenue）；用於「薪資比例」分母。
+   */
+  revenueOverride: number | null
+  /** 最後編輯者 */
+  updatedBy: UUID
+  /** 最後編輯時間 ISO */
+  updatedAt: Timestamp
+}
+
+/** 管理職的單一收入 / 扣款條目（彈性：名稱 + 金額） */
+export interface ManagerLineItem {
+  id: string
+  label: string
+  /** 金額（一律存正數；是收入或扣款由所在欄位決定） */
+  amount: number
+}
+
+/** 管理職薪資 — 每人每月一筆 */
+export interface ManagerSalaryRecord {
+  /** 穩定 id：`${venueId}:${month}:${slug}` */
+  id: string
+  /** 對應館（用於冷門場次獎金、年終獎金的自動計算） */
+  venueId: UUID
+  /** 月份 YYYY-MM */
+  month: string
+  /** 姓名 */
+  personName: string
+  /** 本職月薪（也是請假扣薪的 base） */
+  baseSalary: number
+  /** 美編等其他固定收入 */
+  designPay: number
+  /** 額外獎金（中秋、跨館輔導等手動條目） */
+  bonuses: ManagerLineItem[]
+  /** 是否把「冷門場次獎金」自動計入（從系統冷門開團數算） */
+  includeOffPeakBonus: boolean
+  /** 勞健保自付額（扣款，正數） */
+  insuranceSelf: number
+  /** 請假天數（扣薪 = baseSalary / 30 × 天數） */
+  leaveDays: number
+  /** 其他扣款條目（正數） */
+  deductions: ManagerLineItem[]
+  /** 最後編輯者 */
+  updatedBy: UUID
+  /** 最後編輯時間 ISO */
+  updatedAt: Timestamp
+}
+
+/** 冷門場次獎金 / 罰則規則（每館；見規章圖） */
+export interface OffPeakBonusRule {
+  /** 滿場場數（context；門檻約為其 50%/75%） */
+  fullCount: number
+  /** 達 tier1Open 場 → tier1Bonus */
+  tier1Open: number
+  tier1Bonus: number
+  /** 達 tier2Open 場 → tier2Bonus */
+  tier2Open: number
+  tier2Bonus: number
+  /** 最少開團場數（低於此 → 罰款 penalty） */
+  minOpen: number
+  /** 罰款（正數） */
+  penalty: number
+}
+
+/** 年終獎金級距 */
+export interface YearEndBonusTier {
+  /** 達成率（%）：90 / 100 / 105 / 110 ... */
+  achievePct: number
+  /** 該級距年終獎金 */
+  bonus: number
+}
+
+/** 年終獎金設定（每館每年） */
+export interface YearEndBonusConfig {
+  /** 100% 月營收基準 */
+  baseMonthlyRevenue: number
+  /** 級距（由低到高） */
+  tiers: YearEndBonusTier[]
+}
+
+
+// ============================================================
+// 階段 20：報表繳交追蹤（規章 3-2 報表繳交期限表 + 6-3 遲交罰則）
+// ============================================================
+
+export type ReportType =
+  | 'parttime_wage'   // 工讀生薪資明細表/時薪表
+  | 'petty_cash'      // 零用金表
+  | 'manager_salary'  // 館主薪資表
+  | 'product_stock'   // 月底商品庫存表
+  | 'wage_receipt'    // 工讀生薪資領取表
+  | 'schedule'        // 排班表（發布下月）
+  | 'cash_deposit'    // 現金存款回報（每週一）
+
+export interface ReportDef {
+  type: ReportType
+  name: string
+  /** 每月應繳日（cash_deposit 為每週制，dueDay 表示每週一，計算另論） */
+  dueDay: number
+  target: string
+  note?: string
+  /** 每週制報表（現金存款回報） */
+  weekly?: boolean
+}
+
+/** 規章 3-2 / 6-3：報表繳交期限表（已合併兩表，月底庫存表期限取 6-3 之 25 日） */
+export const REPORT_DEFS: ReportDef[] = [
+  { type: 'parttime_wage',  name: '工讀生薪資明細表', dueDay: 3,  target: '財務部-凱哥',   note: '含時數資料' },
+  { type: 'petty_cash',     name: '零用金表',         dueDay: 3,  target: '各館管理組',   note: '管理部-俊逸監督' },
+  { type: 'manager_salary', name: '館主薪資表',       dueDay: 5,  target: '財務部-凱哥' },
+  { type: 'product_stock',  name: '月底商品庫存表',   dueDay: 25, target: '各館管理組',   note: '商品部-木春監督（3-2 表記 5 日、6-3 表記 25 日，暫採 25 日）' },
+  { type: 'wage_receipt',   name: '工讀生薪資領取表', dueDay: 10, target: '財務部-凱哥' },
+  { type: 'schedule',       name: '排班表',           dueDay: 25, target: '各館管理組',   note: '發布下月班表' },
+  { type: 'cash_deposit',   name: '現金存款回報',     dueDay: 1,  target: '各館管理組',   note: '每週一 17:00 前', weekly: true },
+]
+
+/** 規章 6-3：每逾期一項報表罰 500 元 */
+export const REPORT_LATE_PENALTY = 500
+
+/** 一張報表某館某月的繳交紀錄；唯一鍵 = `${venueId}:${month}:${type}` */
+export interface ReportSubmission {
+  id: string
+  venueId: string
+  month: string          // YYYY-MM
+  type: ReportType
+  /** 該月幾日繳交（1-31）；null = 尚未繳交 */
+  submittedDay: number | null
+}
+
+export type ReportStatusKind = 'ontime' | 'late' | 'pending' | 'missed'
+
+
+// ════════════════════════════════════════════════════════════
+// 階段 20 · Milestone 2
+//   1. 記帳表異常罰則偵測（規章 6-3）
+//   2. 採購 / 修繕分級簽核（金額級距；每級核准人為合理推定，待業主確認）
+//   3. 零用金台帳（年度 6 萬上限；超支扣年終 5000）
+//   4. 比賽企劃追蹤（每館≥3、新竹+內壢合計≥4；未達扣年終 3000）
+// ════════════════════════════════════════════════════════════
+
+// ── M2-1：記帳表異常罰則（規章 6-3）──────────────────────────
+/** 記帳表異常種類（併入 ReconciliationAnomaly 一起追蹤） */
+export type LedgerAnomalyKind = 'deposit_mismatch' | 'negative_balance' | 'revenue_omission'
+/** 規章 6-3 記帳罰則金額 */
+export const LEDGER_PENALTY_DEPOSIT  = 100  // 匯款少匯 / 多匯
+export const LEDGER_PENALTY_NEGATIVE = 500  // 負帳未填說明
+export const LEDGER_PENALTY_OMISSION = 100  // 營收漏填
+export const LEDGER_ANOMALY_LABEL: Record<LedgerAnomalyKind, string> = {
+  deposit_mismatch: '匯款金額不符',
+  negative_balance: '負帳未填說明',
+  revenue_omission: '營收漏填',
+}
+
+// ── M2-2：採購 / 修繕分級簽核 ────────────────────────────────
+export type ProcurementKind = 'purchase' | 'repair'
+export const PROCUREMENT_KIND_LABEL: Record<ProcurementKind, string> = {
+  purchase: '採購', repair: '修繕',
+}
+/** 規章金額級距（核准人為合理推定，待業主確認） */
+export const PROCUREMENT_TIER_1 = 2000  // < 2000：館長自核
+export const PROCUREMENT_TIER_2 = 5000  // 2000–5000：老闆核；> 5000：老闆核 + 強制修繕單 / 完工照
+export type ProcurementTier = 'self' | 'owner' | 'owner_strict'
+export const PROCUREMENT_TIER_LABEL: Record<ProcurementTier, string> = {
+  self:         '館長自核（< $2,000）',
+  owner:        '老闆核准（$2,000–5,000）',
+  owner_strict: '老闆核准＋完工存證（> $5,000）',
+}
+export type ProcurementStatus = 'draft' | 'pending' | 'approved' | 'rejected' | 'completed'
+export const PROCUREMENT_STATUS_LABEL: Record<ProcurementStatus, string> = {
+  draft: '草稿', pending: '待簽核', approved: '已核准', rejected: '已退回', completed: '已完工',
+}
+export interface ProcurementRequest {
+  id: string
+  venueId: string
+  kind: ProcurementKind
+  title: string
+  amount: number
+  status: ProcurementStatus
+  requestedBy: UUID
+  requestedAt: Timestamp
+  approvedBy: UUID | null
+  approvedAt: Timestamp | null
+  /** 修繕完工存證（規章 > $5,000 強制）：evidence 參照 / 說明（接既有 /evidence 上傳系統） */
+  completionEvidenceRef: string | null
+  completedAt: Timestamp | null
+  note: string
+}
+
+// ── M2-3：零用金台帳（年度 6 萬上限；超支扣年終 5000）─────────
+export const PETTY_CASH_ANNUAL_CAP = 60000
+export const PETTY_CASH_OVERSPEND_YEAREND_PENALTY = 5000
+export const PETTY_CASH_CATEGORIES = ['清潔用品', '文具', '茶水', '維護耗材', '交通', '雜支'] as const
+export type PettyCashCategory = typeof PETTY_CASH_CATEGORIES[number]
+export interface PettyCashEntry {
+  id: string
+  venueId: string
+  date: string            // YYYY-MM-DD
+  category: PettyCashCategory
+  label: string
+  amount: number          // 支出金額（正數）
+  enteredBy: UUID
+  enteredAt: Timestamp
+  note: string
+}
+
+// ── M2-4：比賽企劃追蹤 ───────────────────────────────────────
+export const COMPETITION_MIN_PER_VENUE = 3
+/** 內壢(v4) + 新竹(v6) 採「合計」門檻（待業主確認：是否取代各自的 ≥3） */
+export const COMPETITION_COMBINED_GROUP: readonly string[] = ['v4', 'v6']
+export const COMPETITION_COMBINED_TARGET = 4
+export const COMPETITION_SHORTFALL_YEAREND_PENALTY = 3000
+export type CompetitionStatus = 'planned' | 'done' | 'cancelled'
+export const COMPETITION_STATUS_LABEL: Record<CompetitionStatus, string> = {
+  planned: '規劃中', done: '已舉辦', cancelled: '取消',
+}
+export interface CompetitionPlan {
+  id: string
+  venueId: string
+  title: string
+  date: string            // YYYY-MM-DD
+  status: CompetitionStatus
+  note: string
+  createdBy: UUID
+  createdAt: Timestamp
 }

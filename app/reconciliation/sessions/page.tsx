@@ -144,7 +144,8 @@ export default function SessionReconciliationPage() {
                     <th style={th}>時段</th>
                     <th style={th}>球館</th>
                     <th style={th}>類型</th>
-                    <th style={{ ...th, textAlign: 'right' }}>應收</th>
+                    <th style={{ ...th, textAlign: 'right' }}>應收總額</th>
+                    <th style={{ ...th, textAlign: 'right' }}>應收(臨打)</th>
                     <th style={{ ...th, textAlign: 'right' }}>實收</th>
                     <th style={{ ...th, textAlign: 'right' }}>缺口</th>
                     <th style={{ ...th, textAlign: 'center' }}>狀態</th>
@@ -174,6 +175,9 @@ export default function SessionReconciliationPage() {
                             {r.walkInCount > 0      && <span style={{ color: '#1a1917' }}>臨{r.walkInCount}</span>}
                             {totalPlayers === 0     && <span style={{ color: '#aaa' }}>—</span>}
                           </div>
+                        </td>
+                        <td style={{ ...td, textAlign: 'right' }}>
+                          <Money value={r.grossExpectedRevenue} muted={r.grossExpectedRevenue === 0} />
                         </td>
                         <td style={{ ...td, textAlign: 'right' }}>
                           <Money value={r.expectedRevenue} muted={r.expectedRevenue === 0} />
@@ -212,7 +216,7 @@ export default function SessionReconciliationPage() {
         </Panel>
 
         <div style={{ fontSize: 11, color: '#aaa', textAlign: 'center', marginTop: 8 }}>
-          應收 = 臨打 + 補位 人數 × (球費 + 冷氣費)　|　實收 = sum(Payment.amount)　|　季打人員不計入
+          應收總額 = 全部報名人數 × (球費 + 冷氣費)　|　應收(臨打) = 臨打 + 補位 人數 × (球費 + 冷氣費)，季打人員季初已繳故不計　|　實收 = sum(Payment.amount)
         </div>
       </div>
     </div>

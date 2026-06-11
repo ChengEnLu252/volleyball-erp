@@ -21,6 +21,7 @@
 // ============================================================
 
 import { GENERATED } from './generator'
+import { getLedgerAnomalies } from './ledger-anomalies'
 import type {
   Venue, User, Customer, Session, SessionStatus, SessionType, NetHeight, Registration,
   Payment, Product, ProductTransaction, Timeslot, Season, SeasonRental,
@@ -772,7 +773,13 @@ export interface SessionReconciliation {
   walkInCount: number
   substituteCount: number
   seasonPlayerCount: number
+  /** 應收（只算臨打）= (walkIn + substitute) × 單人費用。少收/缺口以此為準 */
   expectedRevenue: number
+  /**
+   * 應收總額（全部報名）= (walkIn + substitute + seasonPlayer) × 單人費用。
+   * 季打人員季初已繳，這欄純供老闆對照「若全部現場收」的理論金額。
+   */
+  grossExpectedRevenue: number
   actualRevenue: number
   /** 應收 - 實收（正 = 少收） */
   gap: number
@@ -817,7 +824,10 @@ export function getSessionReconciliation(
     const walkIn    = regs.filter(r => r.type === 'walk_in').length
     const sub       = regs.filter(r => r.type === 'season_substitute').length
     const seasonP   = regs.filter(r => r.type === 'season_player').length
-    const expected  = s.expectedRevenue ?? 0
+    // 階段 21 M3（Q1）：兩種應收都由費用欄位即時算（反映館長編輯），不讀 stale 衍生值
+    const feePerHead = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const expected   = feePerHead * (walkIn + sub)                 // 只算臨打（缺口基準）
+    const grossExpected = feePerHead * (walkIn + sub + seasonP)    // 應收總額（全部報名）
     const actual    = s.actualRevenue   ?? 0
     const gap       = expected - actual
     const unpaid    = regs.filter(
@@ -852,6 +862,7 @@ export function getSessionReconciliation(
       substituteCount:  sub,
       seasonPlayerCount: seasonP,
       expectedRevenue:  expected,
+      grossExpectedRevenue: grossExpected,
       actualRevenue:    actual,
       gap,
       unpaidCount:      unpaid,
@@ -1230,6 +1241,9 @@ export type ReconciliationAnomalyType =
   | 'rental_unpaid'          // 季租單未繳齊
   | 'gift_excess'            // 商品贈送異常
   | 'self_report_mismatch'   // 無人場次自助回報筆數 > Payment 筆數
+  | 'ledger_negative_balance' // 階段20 M2：記帳負帳未填（規章 6-3）
+  | 'ledger_revenue_omission' // 階段20 M2：記帳營收漏填（規章 6-3）
+  | 'ledger_deposit_mismatch' // 階段20 M2：記帳/匯款金額不符（規章 6-3）
 
 export type AnomalySeverity = 'high' | 'medium' | 'low'
 
@@ -1244,7 +1258,7 @@ export interface ReconciliationAnomaly {
   description: string
   /** 涉及金額（缺口 / 損失估算） */
   amount: number
-  linkType: 'session' | 'rental' | 'product'
+  linkType: 'session' | 'rental' | 'product' | 'ledger'
   linkId: string
 }
 
@@ -1253,6 +1267,9 @@ export const ANOMALY_TYPE_LABEL: Record<ReconciliationAnomalyType, string> = {
   rental_unpaid:        '季租單未繳齊',
   gift_excess:          '商品贈送異常',
   self_report_mismatch: '自助回報異常',
+  ledger_negative_balance: '記帳負帳未填',
+  ledger_revenue_omission: '記帳營收漏填',
+  ledger_deposit_mismatch: '記帳匯款不符',
 }
 
 export const ANOMALY_SEVERITY_LABEL: Record<AnomalySeverity, string> = {
@@ -1356,6 +1373,34 @@ export function getReconciliationAnomalies(filter?: {
       linkType:    'session',
       linkId:      s.id,
     })
+  }
+
+  // 5. 階段 20 M2：記帳表異常罰則（規章 6-3）— 負帳未填 / 營收漏填 / 匯款不符
+  {
+    const ledgerMonth = new Date().toISOString().slice(0, 7)
+    const venueIds = filter?.venueId
+      ? [filter.venueId]
+      : GENERATED.venues.filter(v => v.isActive).map(v => v.id)
+    const kindToType: Record<string, ReconciliationAnomalyType> = {
+      negative_balance: 'ledger_negative_balance',
+      revenue_omission: 'ledger_revenue_omission',
+      deposit_mismatch: 'ledger_deposit_mismatch',
+    }
+    for (const la of getLedgerAnomalies(venueIds, ledgerMonth)) {
+      out.push({
+        id:          `anom-ledger-${la.kind}-${la.linkId}`,
+        type:        kindToType[la.kind],
+        severity:    la.severity,
+        venueId:     la.venueId,
+        venueName:   la.venueName,
+        date:        la.date,
+        title:       la.title,
+        description: la.description,
+        amount:      la.penalty,
+        linkType:    'ledger',
+        linkId:      la.linkId,
+      })
+    }
   }
 
   // 套用 filter
@@ -1734,6 +1779,15 @@ function genToken(): string {
   let t = ''
   for (let i = 0; i < 24; i++) t += chars[Math.floor(Math.random() * chars.length)]
   return t
+}
+
+/** 商城訂單單號 SH-YYYYMMDD-XXXX（XXXX 為 4 位隨機碼，避免碰撞） */
+function genOrderNo(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const ymd = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`
+  const rand = Math.floor(1000 + Math.random() * 9000)
+  return `SH-${ymd}-${rand}`
 }
 
 
@@ -4674,6 +4728,12 @@ export async function uploadEvidence(
         const to   = GENERATED.venues.find(v => v.id === t.toVenueId)?.name
         return from && to ? `${from} → ${to}` : (from ?? to ?? null)
       }
+      case 'captain_goal': {
+        // 階段 16：sourceId = WeeklyGoal.id → venueId → venue 名
+        const goal = GENERATED.weeklyGoals.find(g => g.id === args.sourceId)
+        if (!goal) return null
+        return GENERATED.venues.find(v => v.id === goal.venueId)?.name ?? null
+      }
       default: {
         // exhaustive — TS 會在新增 sourceType 但沒補此 case 時報錯
         const _exhaustive: never = args.sourceType
@@ -6199,4 +6259,798 @@ export function getAutoReport(period: ReportPeriod = 'week'): AutoReport {
     concerns,
     recommendations,
   }
+}
+
+
+// ============================================================
+// 二十、館長週目標 + 通知收件匣（階段 16）
+// ============================================================
+// 業務流程：
+//   1. createWeeklyGoal — 老闆指派 / 館長自加
+//   2. submitWeeklyGoal — 館長上傳完成截圖後提交 → 自動通知老闆
+//   3. confirmWeeklyGoal / returnWeeklyGoal — 老闆確認 / 退回 → 通知館長
+//   通知系統泛用化：addNotification + type + recipientUserId + linkHref，
+//   未來 F3 對帳回報可直接重用（加 NotificationType member 即可）。
+// ============================================================
+
+import {
+  addWeeklyGoal as _addWeeklyGoal,
+  patchWeeklyGoal as _patchWeeklyGoal,
+  addNotification as _addNotification,
+  patchNotificationRead as _patchNotificationRead,
+} from './store'
+import type {
+  WeeklyGoal, WeeklyGoalSource, AppNotification, NotificationType,
+} from '@/types'
+import { WEEKLY_GOAL_STATUS_LABEL, NOTIFICATION_TYPE_LABEL } from '@/types'
+
+export { WEEKLY_GOAL_STATUS_LABEL, NOTIFICATION_TYPE_LABEL }
+export { WEEKLY_GOAL_SOURCE_LABEL } from '@/types'
+
+
+// ── 20.1 週起始 helper ───────────────────────────────────────
+
+/** 某日所在週的週一 (YYYY-MM-DD)。getUTCDay: 0=日..6=六 */
+export function weekStartOf(dateStr: string): string {
+  const day = new Date(dateStr + 'T00:00:00Z').getUTCDay()
+  const backToMonday = (day + 6) % 7
+  const d = new Date(dateStr + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() - backToMonday)
+  return d.toISOString().split('T')[0]
+}
+
+/** 本週週一 */
+export function getCurrentWeekStart(): string {
+  return weekStartOf(new Date().toISOString().split('T')[0])
+}
+
+/** 週標籤：「08/04 – 08/10」 */
+export function formatWeekRange(weekStart: string): string {
+  const start = new Date(weekStart + 'T00:00:00Z')
+  const end = new Date(weekStart + 'T00:00:00Z')
+  end.setUTCDate(end.getUTCDate() + 6)
+  const f = (d: Date) =>
+    `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`
+  return `${f(start)} – ${f(end)}`
+}
+
+
+// ── 20.2 週目標查詢 ──────────────────────────────────────────
+
+/**
+ * 列出週目標，可依 venue 可見範圍 / 週 / 狀態過濾。
+ * @param visible 'all' 或 venueId 陣列（通常傳 getCurrentVisibleVenueIds()）
+ */
+export function listWeeklyGoals(opts?: {
+  visible?: string[] | 'all'
+  weekStart?: string
+  venueId?: string
+}): WeeklyGoal[] {
+  const visible = opts?.visible ?? 'all'
+  let result = GENERATED.weeklyGoals.slice()
+  if (visible !== 'all') {
+    result = result.filter(g => visible.includes(g.venueId))
+  }
+  if (opts?.venueId) {
+    result = result.filter(g => g.venueId === opts.venueId)
+  }
+  if (opts?.weekStart) {
+    result = result.filter(g => g.weekStart === opts.weekStart)
+  }
+  // 新到舊（依 weekStart desc，再 createdAt desc）
+  return result.sort((a, b) =>
+    a.weekStart === b.weekStart
+      ? b.createdAt.localeCompare(a.createdAt)
+      : b.weekStart.localeCompare(a.weekStart),
+  )
+}
+
+export function getWeeklyGoal(id: string): WeeklyGoal | null {
+  return GENERATED.weeklyGoals.find(g => g.id === id) ?? null
+}
+
+/** 待老闆確認的目標數（owner 用於儀表 / 提示） */
+export function countPendingGoalConfirmations(visible?: string[] | 'all'): number {
+  return listWeeklyGoals({ visible }).filter(g => g.status === 'submitted').length
+}
+
+
+// ── 20.3 通知查詢 ────────────────────────────────────────────
+
+/** 列出某 user 的通知（新到舊） */
+export function listNotificationsForUser(userId: string): AppNotification[] {
+  return GENERATED.notifications
+    .filter(n => n.recipientUserId === userId)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+/** 目前登入 user 的通知 */
+export function listMyNotifications(): AppNotification[] {
+  return listNotificationsForUser(getCurrentUserId())
+}
+
+/** 某 user 未讀通知數 */
+export function getUnreadNotificationCount(userId: string): number {
+  return GENERATED.notifications.filter(n => n.recipientUserId === userId && !n.isRead).length
+}
+
+/** 目前登入 user 未讀通知數（sidebar 鈴鐺 badge 用） */
+export function getMyUnreadNotificationCount(): number {
+  return getUnreadNotificationCount(getCurrentUserId())
+}
+
+
+// ── 20.4 內部：建立通知 ──────────────────────────────────────
+
+function pushNotification(args: {
+  type: NotificationType
+  recipientUserId: string
+  title: string
+  body: string
+  linkHref: string | null
+  relatedType: string | null
+  relatedId: string | null
+}): void {
+  const notif: AppNotification = {
+    id: genId('ntf'),
+    type: args.type,
+    recipientUserId: args.recipientUserId,
+    title: args.title,
+    body: args.body,
+    linkHref: args.linkHref,
+    relatedType: args.relatedType,
+    relatedId: args.relatedId,
+    isRead: false,
+    createdAt: new Date().toISOString(),
+  }
+  _addNotification(notif)
+}
+
+/** 找出所有 active owner（通常 demo 只有 u1） */
+function listOwnerUserIds(): string[] {
+  return GENERATED.users.filter(u => u.globalRole === 'owner' && u.isActive).map(u => u.id)
+}
+
+
+// ── 20.5 週目標 mutations ────────────────────────────────────
+
+/**
+ * 建立週目標。
+ * source 依目前登入者角色推：owner → owner_assigned，否則 manager_self。
+ */
+export function createWeeklyGoal(args: {
+  venueId: string
+  weekStart: string
+  description: string
+}): WeeklyGoal {
+  const uid = getCurrentUserId()
+  const role = getCurrentEffectiveRole()
+  const source: WeeklyGoalSource = role === 'owner' ? 'owner_assigned' : 'manager_self'
+  const now = new Date().toISOString()
+  const goal: WeeklyGoal = {
+    id: genId('wg'),
+    venueId: args.venueId,
+    weekStart: weekStartOf(args.weekStart),
+    description: args.description.trim(),
+    source,
+    createdBy: uid,
+    status: 'assigned',
+    evidenceId: null,
+    submittedBy: null,
+    submittedAt: null,
+    confirmedBy: null,
+    confirmedAt: null,
+    returnReason: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+  _addWeeklyGoal(goal)
+  const venueName = GENERATED.venues.find(v => v.id === args.venueId)?.name ?? null
+  writeAudit({
+    actor: getAdminActor(),
+    venue: venueName,
+    action: 'CREATE_WEEKLY_GOAL',
+    entityType: 'WeeklyGoal',
+    entityId: goal.id,
+    targetLabel: venueName ?? args.venueId,
+    detail: `${source === 'owner_assigned' ? '老闆指派' : '館長自訂'}週目標：${goal.description.slice(0, 40)}`,
+    newValues: { venueId: args.venueId, weekStart: goal.weekStart, source },
+  })
+  // 老闆指派 → 通知該館館長（讓館長知道有新目標）
+  if (source === 'owner_assigned') {
+    const managers = listVenueStaff(args.venueId).filter(r => r.role === 'manager')
+    for (const m of managers) {
+      pushNotification({
+        type: 'goal_submitted', // 重用 type：此處語意為「有新指派」— 但更精準應另開 type；
+        recipientUserId: m.userId,
+        title: '新的週目標',
+        body: `老闆指派了一個本週目標給 ${venueName ?? '你的場館'}：${goal.description.slice(0, 30)}`,
+        linkHref: '/goals',
+        relatedType: 'WeeklyGoal',
+        relatedId: goal.id,
+      })
+    }
+  }
+  return goal
+}
+
+/**
+ * 館長提交週目標（已上傳完成截圖）。
+ * assigned/returned → submitted；記 evidenceId + submittedBy；自動通知所有老闆。
+ */
+export function submitWeeklyGoal(args: {
+  goalId: string
+  evidenceId: string
+}): { ok: true } | { ok: false; reason: string } {
+  const goal = getWeeklyGoal(args.goalId)
+  if (!goal) return { ok: false, reason: '找不到此目標' }
+  if (goal.status === 'submitted') return { ok: false, reason: '此目標已提交，等待老闆確認' }
+  if (goal.status === 'confirmed') return { ok: false, reason: '此目標已確認完成' }
+
+  const uid = getCurrentUserId()
+  const now = new Date().toISOString()
+  _patchWeeklyGoal(goal.id, {
+    status: 'submitted',
+    evidenceId: args.evidenceId,
+    submittedBy: uid,
+    submittedAt: now,
+    returnReason: null,
+    updatedAt: now,
+  })
+  const venueName = GENERATED.venues.find(v => v.id === goal.venueId)?.name ?? null
+  const submitterName = GENERATED.users.find(u => u.id === uid)?.name ?? '館長'
+  writeAudit({
+    actor: getAdminActor(),
+    venue: venueName,
+    action: 'SUBMIT_WEEKLY_GOAL',
+    entityType: 'WeeklyGoal',
+    entityId: goal.id,
+    targetLabel: venueName ?? goal.venueId,
+    detail: `${submitterName} 上傳完成截圖並提交：${goal.description.slice(0, 40)}`,
+    newValues: { evidenceId: args.evidenceId, status: 'submitted' },
+  })
+  // 自動通知所有老闆
+  for (const ownerId of listOwnerUserIds()) {
+    pushNotification({
+      type: 'goal_submitted',
+      recipientUserId: ownerId,
+      title: '館長目標待確認',
+      body: `${venueName ?? '某館'}的 ${submitterName} 已上傳完成截圖：${goal.description.slice(0, 30)}`,
+      linkHref: '/goals',
+      relatedType: 'WeeklyGoal',
+      relatedId: goal.id,
+    })
+  }
+  return { ok: true }
+}
+
+/** 老闆確認週目標完成。submitted → confirmed；通知提交的館長。 */
+export function confirmWeeklyGoal(args: {
+  goalId: string
+}): { ok: true } | { ok: false; reason: string } {
+  const goal = getWeeklyGoal(args.goalId)
+  if (!goal) return { ok: false, reason: '找不到此目標' }
+  if (goal.status !== 'submitted') return { ok: false, reason: '只有「待確認」的目標可以確認' }
+
+  const uid = getCurrentUserId()
+  const now = new Date().toISOString()
+  _patchWeeklyGoal(goal.id, {
+    status: 'confirmed',
+    confirmedBy: uid,
+    confirmedAt: now,
+    updatedAt: now,
+  })
+  const venueName = GENERATED.venues.find(v => v.id === goal.venueId)?.name ?? null
+  writeAudit({
+    actor: getAdminActor(),
+    venue: venueName,
+    action: 'CONFIRM_WEEKLY_GOAL',
+    entityType: 'WeeklyGoal',
+    entityId: goal.id,
+    targetLabel: venueName ?? goal.venueId,
+    detail: `老闆確認完成：${goal.description.slice(0, 40)}`,
+    newValues: { status: 'confirmed' },
+  })
+  // 通知提交者（館長）
+  if (goal.submittedBy) {
+    pushNotification({
+      type: 'goal_confirmed',
+      recipientUserId: goal.submittedBy,
+      title: '目標已確認',
+      body: `老闆已確認你在 ${venueName ?? '場館'} 的完成回報：${goal.description.slice(0, 30)}`,
+      linkHref: '/goals',
+      relatedType: 'WeeklyGoal',
+      relatedId: goal.id,
+    })
+  }
+  return { ok: true }
+}
+
+/** 老闆退回週目標（附理由）。submitted → returned；通知提交的館長。 */
+export function returnWeeklyGoal(args: {
+  goalId: string
+  reason: string
+}): { ok: true } | { ok: false; reason: string } {
+  const goal = getWeeklyGoal(args.goalId)
+  if (!goal) return { ok: false, reason: '找不到此目標' }
+  if (goal.status !== 'submitted') return { ok: false, reason: '只有「待確認」的目標可以退回' }
+  if (!args.reason.trim()) return { ok: false, reason: '請填寫退回理由' }
+
+  const uid = getCurrentUserId()
+  const now = new Date().toISOString()
+  _patchWeeklyGoal(goal.id, {
+    status: 'returned',
+    returnReason: args.reason.trim(),
+    confirmedBy: uid,   // 紀錄處理者
+    updatedAt: now,
+  })
+  const venueName = GENERATED.venues.find(v => v.id === goal.venueId)?.name ?? null
+  writeAudit({
+    actor: getAdminActor(),
+    venue: venueName,
+    action: 'RETURN_WEEKLY_GOAL',
+    entityType: 'WeeklyGoal',
+    entityId: goal.id,
+    targetLabel: venueName ?? goal.venueId,
+    detail: `老闆退回（${args.reason.trim().slice(0, 30)}）：${goal.description.slice(0, 30)}`,
+    newValues: { status: 'returned', returnReason: args.reason.trim() },
+  })
+  if (goal.submittedBy) {
+    pushNotification({
+      type: 'goal_returned',
+      recipientUserId: goal.submittedBy,
+      title: '目標被退回',
+      body: `老闆退回了你在 ${venueName ?? '場館'} 的回報，理由：${args.reason.trim().slice(0, 40)}`,
+      linkHref: '/goals',
+      relatedType: 'WeeklyGoal',
+      relatedId: goal.id,
+    })
+  }
+  return { ok: true }
+}
+
+
+// ── 20.6 通知 mutations ──────────────────────────────────────
+
+export function markNotificationRead(id: string): void {
+  _patchNotificationRead(id, true)
+}
+
+export function markAllMyNotificationsRead(): void {
+  const uid = getCurrentUserId()
+  for (const n of GENERATED.notifications) {
+    if (n.recipientUserId === uid && !n.isRead) _patchNotificationRead(n.id, true)
+  }
+}
+
+
+// ============================================================
+// 21. 階段 17：線上商城（商品目錄 + 訂單流程）
+// ============================================================
+// 設計（用戶確認）：
+//   - 單一統合商城；庫存用獨立 onlineStock 池（與各館 venueProducts 分開）。
+//   - 取貨支援 pickup（到館自取）/ shipping（宅配）兩種。
+//   - 金流之後串 → paymentChannel 預留；paidAt 由後台手動標記。
+//   - 公開頁 /shop 下單（channel='online'，placedByUserId=null）；
+//     後台 /orders 可代客下單（channel='backend'，placedByUserId=操作員）。
+//   - 下單即扣 onlineStock；取消回補。
+//   - 下單自動通知所有 owner（+ 取貨館館長），重用階段 16 收件匣。
+// ============================================================
+
+import {
+  addOrder as _addOrder,
+  patchOrder as _patchOrder,
+  patchShopProduct as _patchShopProduct,
+} from './store'
+import type {
+  Order, OrderItem, OrderStatus, OrderChannel,
+  ShopProduct, FulfillmentType, ShippingInfo, PaymentChannel,
+} from '@/types'
+
+/** 宅配運費（單一費率；之後可改成依重量 / 地區算） */
+export const SHOP_SHIPPING_FEE = 80
+
+/** 系統 actor（線上自助下單沒有登入 User） */
+function getSystemActor(): AuditActor {
+  return { type: 'system', id: 'system', name: '線上商城' }
+}
+
+// ── 21.1 商品目錄查詢 ────────────────────────────────────────
+
+/**
+ * 列出商城商品。
+ * @param opts.includeUnlisted true = 含下架（後台用）；預設只回上架中。
+ */
+export function listShopProducts(opts?: { includeUnlisted?: boolean }): ShopProduct[] {
+  // 用「程式碼單元」順序排序（category 為 ASCII、id 為 ASCII），
+  // 伺服器端與瀏覽器端結果完全一致；避免中文名稱 localeCompare 在不同環境
+  // 排序規則不同而造成水合（hydration）不一致。
+  const cmp = (x: string, y: string) => (x < y ? -1 : x > y ? 1 : 0)
+  const all = [...GENERATED.shopProducts].sort((a, b) => cmp(a.category, b.category) || cmp(a.id, b.id))
+  if (opts?.includeUnlisted) return all
+  return all.filter(p => p.isListed)
+}
+
+/** 取單一商城商品 */
+export function getShopProduct(id: string): ShopProduct | null {
+  return GENERATED.shopProducts.find(p => p.id === id) ?? null
+}
+
+// ── 21.2 訂單查詢 ────────────────────────────────────────────
+
+/** 取貨方式運費 */
+export function getShopShippingFee(fulfillment: FulfillmentType): number {
+  return fulfillment === 'shipping' ? SHOP_SHIPPING_FEE : 0
+}
+
+/**
+ * 列出訂單（後台用，依角色過濾）。
+ * owner → 全部；manager → 取貨球館屬於自己館的訂單；staff → 空（頁面已擋）。
+ * 新到舊排序。
+ */
+export function listOrders(opts?: { status?: OrderStatus }): Order[] {
+  const visible = getCurrentVisibleVenueIds()
+  let rows = [...GENERATED.orders]
+  if (visible !== 'all') {
+    rows = rows.filter(o => o.pickupVenueId !== null && visible.includes(o.pickupVenueId))
+  }
+  if (opts?.status) rows = rows.filter(o => o.status === opts.status)
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+}
+
+/** 取單一訂單 */
+export function getOrder(id: string): Order | null {
+  return GENERATED.orders.find(o => o.id === id) ?? null
+}
+
+/** 目前角色可見範圍內「待處理 (pending)」訂單數（sidebar badge 用） */
+export function getPendingOrderCount(): number {
+  return listOrders({ status: 'pending' }).length
+}
+
+/** 各狀態訂單數（後台頁頂部統計用） */
+export function getOrderStatusCounts(): Record<OrderStatus, number> {
+  const counts: Record<OrderStatus, number> = { pending: 0, paid: 0, fulfilled: 0, cancelled: 0 }
+  for (const o of listOrders()) counts[o.status]++
+  return counts
+}
+
+// ── 21.3 下單 ────────────────────────────────────────────────
+
+interface CreateOrderArgs {
+  channel: OrderChannel
+  customerName: string
+  customerPhone: string
+  customerEmail?: string | null
+  /** 購物車內容（productId + quantity + 規格；價格/名稱以伺服器當下快照為準） */
+  items: Array<{ productId: string; quantity: number; size?: string | null; color?: string | null }>
+  fulfillment: FulfillmentType
+  /** pickup 時必填 */
+  pickupVenueId?: string | null
+  /** shipping 時必填 */
+  shipping?: ShippingInfo | null
+  paymentChannel: PaymentChannel
+  notes?: string | null
+}
+
+// —— 規格庫存工具（有規格商品改動 variants[].stock，並同步 onlineStock 總量）——
+
+/** 該 (size,color) 是否為商品的合法規格。 */
+function shopProductVariantExists(p: ShopProduct, size: string | null, color: string | null): boolean {
+  return p.variants.some(x => (x.size ?? null) === (size ?? null) && (x.color ?? null) === (color ?? null))
+}
+
+/** 取某規格可購庫存。無規格商品回 onlineStock；找不到規格回 0。 */
+function shopVariantAvailable(p: ShopProduct, size: string | null, color: string | null): number {
+  if (p.variants.length === 0) return p.onlineStock
+  const v = p.variants.find(x => (x.size ?? null) === (size ?? null) && (x.color ?? null) === (color ?? null))
+  return v ? v.stock : 0
+}
+
+/**
+ * 對某規格庫存加減 delta（負數 = 扣、正數 = 回補）。
+ *   - 無規格商品 / 找不到對應規格（含舊單 null 規格）→ 退回直接調整 onlineStock。
+ *   - 有規格商品 → 調該規格庫存，並同步 onlineStock = 各規格加總。
+ */
+function applyShopStockDelta(p: ShopProduct, size: string | null, color: string | null, delta: number, now: string): void {
+  if (p.variants.length === 0) {
+    _patchShopProduct(p.id, { onlineStock: Math.max(0, p.onlineStock + delta), updatedAt: now })
+    return
+  }
+  const idx = p.variants.findIndex(x => (x.size ?? null) === (size ?? null) && (x.color ?? null) === (color ?? null))
+  if (idx < 0) {
+    _patchShopProduct(p.id, { onlineStock: Math.max(0, p.onlineStock + delta), updatedAt: now })
+    return
+  }
+  const variants = p.variants.map((v, i) => (i === idx ? { ...v, stock: Math.max(0, v.stock + delta) } : v))
+  const total = variants.reduce((s, v) => s + v.stock, 0)
+  _patchShopProduct(p.id, { variants, onlineStock: total, updatedAt: now })
+}
+
+/**
+ * 建立訂單。驗證庫存 → 扣庫存 → 建單 → 通知 → 稽核。
+ * 任一商品 / 規格庫存不足則整筆失敗（不部分成立）。
+ */
+export function createOrder(
+  args: CreateOrderArgs,
+): { ok: true; order: Order } | { ok: false; reason: string } {
+  if (!args.customerName.trim()) return { ok: false, reason: '請填寫姓名' }
+  if (!args.customerPhone.trim()) return { ok: false, reason: '請填寫電話' }
+  if (args.items.length === 0) return { ok: false, reason: '購物車是空的' }
+
+  if (args.fulfillment === 'pickup' && !args.pickupVenueId) {
+    return { ok: false, reason: '請選擇取貨球館' }
+  }
+  if (args.fulfillment === 'shipping') {
+    const s = args.shipping
+    if (!s || !s.recipient.trim() || !s.phone.trim() || !s.address.trim()) {
+      return { ok: false, reason: '請填寫完整收件資訊' }
+    }
+  }
+
+  // 合併同商品 + 同規格的數量 + 驗證庫存
+  const merged = new Map<string, { productId: string; size: string | null; color: string | null; quantity: number }>()
+  for (const it of args.items) {
+    if (it.quantity <= 0) continue
+    const size = it.size ?? null
+    const color = it.color ?? null
+    const key = `${it.productId}|${size ?? ''}|${color ?? ''}`
+    const prev = merged.get(key)
+    if (prev) prev.quantity += it.quantity
+    else merged.set(key, { productId: it.productId, size, color, quantity: it.quantity })
+  }
+  if (merged.size === 0) return { ok: false, reason: '購物車是空的' }
+
+  const orderItems: OrderItem[] = []
+  for (const { productId, size, color, quantity } of merged.values()) {
+    const p = getShopProduct(productId)
+    if (!p || !p.isListed) return { ok: false, reason: '部分商品已下架，請重新整理購物車' }
+    if (p.variants.length > 0 && !shopProductVariantExists(p, size, color)) {
+      return { ok: false, reason: `「${p.name}」請選擇尺寸 / 顏色` }
+    }
+    const avail = shopVariantAvailable(p, size, color)
+    if (quantity > avail) {
+      const spec = [size, color].filter(Boolean).join('・')
+      return { ok: false, reason: `「${p.name}${spec ? `（${spec}）` : ''}」庫存不足（剩 ${avail}）` }
+    }
+    orderItems.push({
+      productId: p.id,
+      name: p.name,
+      unitPrice: p.unitPrice,
+      quantity,
+      subtotal: p.unitPrice * quantity,
+      size,
+      color,
+    })
+  }
+
+  const itemTotal = orderItems.reduce((s, it) => s + it.subtotal, 0)
+  const shippingFee = getShopShippingFee(args.fulfillment)
+  const now = new Date().toISOString()
+
+  const order: Order = {
+    id: genId('ord'),
+    orderNo: genOrderNo(),
+    channel: args.channel,
+    customerName: args.customerName.trim(),
+    customerPhone: args.customerPhone.trim(),
+    customerEmail: args.customerEmail?.trim() || null,
+    placedByUserId: args.channel === 'backend' ? getCurrentUserId() : null,
+    items: orderItems,
+    itemTotal,
+    shippingFee,
+    total: itemTotal + shippingFee,
+    fulfillment: args.fulfillment,
+    pickupVenueId: args.fulfillment === 'pickup' ? (args.pickupVenueId ?? null) : null,
+    shipping: args.fulfillment === 'shipping' ? (args.shipping ?? null) : null,
+    paymentChannel: args.paymentChannel,
+    status: 'pending',
+    notes: args.notes?.trim() || null,
+    paidAt: null,
+    fulfilledAt: null,
+    cancelledAt: null,
+    cancelReason: null,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  // 扣庫存（依規格）
+  for (const it of orderItems) {
+    const p = getShopProduct(it.productId)!
+    applyShopStockDelta(p, it.size ?? null, it.color ?? null, -it.quantity, now)
+  }
+
+  _addOrder(order)
+
+  const venueName = order.pickupVenueId
+    ? (GENERATED.venues.find(v => v.id === order.pickupVenueId)?.name ?? null)
+    : null
+  const fulfillDesc = order.fulfillment === 'pickup'
+    ? `到館自取${venueName ? `（${venueName}）` : ''}`
+    : '宅配寄送'
+
+  writeAudit({
+    actor: args.channel === 'backend' ? getAdminActor() : getSystemActor(),
+    venue: venueName,
+    action: 'CREATE_ORDER',
+    entityType: 'Order',
+    entityId: order.id,
+    targetLabel: order.orderNo,
+    detail: `${ORDER_CHANNEL_LABEL_LOCAL(order.channel)}下單 ${order.orderNo}：${order.customerName} · ${fulfillDesc} · $${order.total}`,
+    newValues: { channel: order.channel, total: order.total, fulfillment: order.fulfillment, itemCount: orderItems.length },
+  })
+
+  // 通知所有 owner（+ 取貨館館長）
+  const recipients = new Set<string>(listOwnerUserIds())
+  if (order.pickupVenueId) {
+    for (const m of listVenueStaff(order.pickupVenueId).filter(r => r.role === 'manager')) {
+      recipients.add(m.userId)
+    }
+  }
+  const itemSummary = orderItems.map(it => `${it.name}×${it.quantity}`).join('、')
+  for (const uid of recipients) {
+    pushNotification({
+      type: 'order_placed',
+      recipientUserId: uid,
+      title: `新訂單 ${order.orderNo}`,
+      body: `${order.customerName}（${fulfillDesc}）下單 $${order.total}：${itemSummary.slice(0, 40)}`,
+      linkHref: '/orders',
+      relatedType: 'Order',
+      relatedId: order.id,
+    })
+  }
+
+  return { ok: true, order }
+}
+
+/** 訂單通路 label（避免在 api.ts 直接 import label const，集中一處） */
+function ORDER_CHANNEL_LABEL_LOCAL(channel: OrderChannel): string {
+  return channel === 'backend' ? '後台代客' : '線上'
+}
+
+// ── 21.4 訂單狀態 mutations（後台） ──────────────────────────
+
+/** 標記已付款（pending → paid）。金流串接前由後台手動操作。 */
+export function markOrderPaid(orderId: string): { ok: true } | { ok: false; reason: string } {
+  const o = getOrder(orderId)
+  if (!o) return { ok: false, reason: '找不到訂單' }
+  if (o.status === 'cancelled') return { ok: false, reason: '訂單已取消' }
+  if (o.status !== 'pending') return { ok: false, reason: '此訂單無法標記付款' }
+  const now = new Date().toISOString()
+  _patchOrder(o.id, { status: 'paid', paidAt: now, updatedAt: now })
+  writeAudit({
+    actor: getAdminActor(),
+    venue: o.pickupVenueId ? (GENERATED.venues.find(v => v.id === o.pickupVenueId)?.name ?? null) : null,
+    action: 'PAY_ORDER',
+    entityType: 'Order',
+    entityId: o.id,
+    targetLabel: o.orderNo,
+    detail: `標記已付款 ${o.orderNo}（$${o.total}）`,
+    oldValues: { status: o.status },
+    newValues: { status: 'paid' },
+  })
+  return { ok: true }
+}
+
+/** 標記已完成 / 已出貨（pending|paid → fulfilled）。 */
+export function fulfillOrder(orderId: string): { ok: true } | { ok: false; reason: string } {
+  const o = getOrder(orderId)
+  if (!o) return { ok: false, reason: '找不到訂單' }
+  if (o.status === 'cancelled') return { ok: false, reason: '訂單已取消' }
+  if (o.status === 'fulfilled') return { ok: false, reason: '訂單已完成' }
+  const now = new Date().toISOString()
+  _patchOrder(o.id, { status: 'fulfilled', fulfilledAt: now, updatedAt: now })
+  writeAudit({
+    actor: getAdminActor(),
+    venue: o.pickupVenueId ? (GENERATED.venues.find(v => v.id === o.pickupVenueId)?.name ?? null) : null,
+    action: 'FULFILL_ORDER',
+    entityType: 'Order',
+    entityId: o.id,
+    targetLabel: o.orderNo,
+    detail: `標記完成 ${o.orderNo}（${o.fulfillment === 'pickup' ? '已取貨' : '已出貨'}）`,
+    oldValues: { status: o.status },
+    newValues: { status: 'fulfilled' },
+  })
+  return { ok: true }
+}
+
+/** 取消訂單（→ cancelled，回補 onlineStock）。已完成的單不可取消。 */
+export function cancelOrder(orderId: string, reason: string): { ok: true } | { ok: false; reason: string } {
+  const o = getOrder(orderId)
+  if (!o) return { ok: false, reason: '找不到訂單' }
+  if (o.status === 'cancelled') return { ok: false, reason: '訂單已取消' }
+  if (o.status === 'fulfilled') return { ok: false, reason: '已完成的訂單不可取消' }
+  const now = new Date().toISOString()
+  // 回補庫存（依規格）
+  for (const it of o.items) {
+    const p = getShopProduct(it.productId)
+    if (p) applyShopStockDelta(p, it.size ?? null, it.color ?? null, it.quantity, now)
+  }
+  _patchOrder(o.id, { status: 'cancelled', cancelledAt: now, cancelReason: reason.trim() || '（未填理由）', updatedAt: now })
+  writeAudit({
+    actor: getAdminActor(),
+    venue: o.pickupVenueId ? (GENERATED.venues.find(v => v.id === o.pickupVenueId)?.name ?? null) : null,
+    action: 'CANCEL_ORDER',
+    entityType: 'Order',
+    entityId: o.id,
+    targetLabel: o.orderNo,
+    detail: `取消訂單 ${o.orderNo}：${reason.trim() || '（未填理由）'}`,
+    oldValues: { status: o.status },
+    newValues: { status: 'cancelled' },
+  })
+  return { ok: true }
+}
+
+// ── 21.5 商城商品 mutations（後台庫存管理） ──────────────────
+
+/** 調整商城商品庫存（直接設為新值）。 */
+export function adjustShopStock(productId: string, newStock: number): { ok: true } | { ok: false; reason: string } {
+  const p = getShopProduct(productId)
+  if (!p) return { ok: false, reason: '找不到商品' }
+  if (newStock < 0) return { ok: false, reason: '庫存不可為負' }
+  const now = new Date().toISOString()
+  const old = p.onlineStock
+  _patchShopProduct(p.id, { onlineStock: newStock, updatedAt: now })
+  writeAudit({
+    actor: getAdminActor(),
+    venue: null,
+    action: 'ADJUST_SHOP_STOCK',
+    entityType: 'ShopProduct',
+    entityId: p.id,
+    targetLabel: p.name,
+    detail: `調整商城庫存「${p.name}」：${old} → ${newStock}`,
+    oldValues: { onlineStock: old },
+    newValues: { onlineStock: newStock },
+  })
+  return { ok: true }
+}
+
+/** 調整某「規格」的庫存（有規格商品後台用；同步 onlineStock 總量）。 */
+export function adjustShopVariantStock(
+  productId: string, size: string | null, color: string | null, newStock: number,
+): { ok: true } | { ok: false; reason: string } {
+  const p = getShopProduct(productId)
+  if (!p) return { ok: false, reason: '找不到商品' }
+  if (p.variants.length === 0) return adjustShopStock(productId, newStock)
+  if (newStock < 0) return { ok: false, reason: '庫存不可為負' }
+  const idx = p.variants.findIndex(x => (x.size ?? null) === (size ?? null) && (x.color ?? null) === (color ?? null))
+  if (idx < 0) return { ok: false, reason: '找不到規格' }
+  const now = new Date().toISOString()
+  const old = p.variants[idx].stock
+  const variants = p.variants.map((v, i) => (i === idx ? { ...v, stock: newStock } : v))
+  const total = variants.reduce((s, v) => s + v.stock, 0)
+  _patchShopProduct(p.id, { variants, onlineStock: total, updatedAt: now })
+  const spec = [size, color].filter(Boolean).join('・')
+  writeAudit({
+    actor: getAdminActor(),
+    venue: null,
+    action: 'ADJUST_SHOP_STOCK',
+    entityType: 'ShopProduct',
+    entityId: p.id,
+    targetLabel: `${p.name}（${spec}）`,
+    detail: `調整商城庫存「${p.name}・${spec}」：${old} → ${newStock}`,
+    oldValues: { stock: old },
+    newValues: { stock: newStock },
+  })
+  return { ok: true }
+}
+
+/** 上 / 下架商城商品。 */
+export function toggleShopListing(productId: string, isListed: boolean): { ok: true } | { ok: false; reason: string } {
+  const p = getShopProduct(productId)
+  if (!p) return { ok: false, reason: '找不到商品' }
+  const now = new Date().toISOString()
+  _patchShopProduct(p.id, { isListed, updatedAt: now })
+  writeAudit({
+    actor: getAdminActor(),
+    venue: null,
+    action: 'ADJUST_SHOP_STOCK',
+    entityType: 'ShopProduct',
+    entityId: p.id,
+    targetLabel: p.name,
+    detail: `${isListed ? '上架' : '下架'}商城商品「${p.name}」`,
+    oldValues: { isListed: p.isListed },
+    newValues: { isListed },
+  })
+  return { ok: true }
 }
