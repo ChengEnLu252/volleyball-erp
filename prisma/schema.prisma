@@ -16,7 +16,11 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  // app 執行階段：走 Supabase pooled 連線（Supavisor，transaction mode, port 6543）
+  url       = env("DATABASE_URL")
+  // migrate / introspect：走 direct 連線（session mode, port 5432）
+  // — pooled 連線不支援 migration 需要的 prepared statements / DDL
+  directUrl = env("DIRECT_URL")
 }
 
 
