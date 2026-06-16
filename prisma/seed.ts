@@ -27,7 +27,11 @@ import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { GENERATED } from '../data/generator'
 
-const prisma = new PrismaClient()
+// 大量 seed 走 direct/session 連線（DIRECT_URL），不走 transaction pooler——
+// pgbouncer transaction mode 對長時間多批寫入容易逾時/斷線。
+const prisma = new PrismaClient({
+  datasourceUrl: process.env.DIRECT_URL ?? process.env.DATABASE_URL,
+})
 
 // ── helpers ──────────────────────────────────────────────────
 
@@ -44,7 +48,9 @@ async function insertChunked<T>(
   label: string,
   rows: readonly T[],
   fn: (chunk: T[]) => Promise<unknown>,
-  size = 1000,
+  // 2000 列/批：最寬的 table（session ~21 欄）× 2000 仍遠低於 Postgres
+  // 65535 bind-param 上限，同時把網路往返次數降到約 1/2。
+  size = 2000,
 ): Promise<void> {
   for (let i = 0; i < rows.length; i += size) {
     await fn(rows.slice(i, i + size))
