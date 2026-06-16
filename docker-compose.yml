@@ -1,0 +1,23 @@
+# ============================================================
+# 本機開發用 Postgres（Phase 1 開發/驗證環境）
+# ------------------------------------------------------------
+# 正式主機 P6 再定；這只是讓本機能跑真資料庫。
+# 啟動：docker compose up -d   （或 npm run db:up）
+# 連線字串見 .env 的 DATABASE_URL
+# ============================================================
+services:
+  db:
+    image: postgres:16
+    container_name: volleyops-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: volleyops
+      POSTGRES_PASSWORD: volleyops_dev
+      POSTGRES_DB: volleyops
+    ports:
+      - "5432:5432"
+    volumes:
+      - volleyops_pgdata:/var/lib/postgresql/data
+
+volumes:
+  volleyops_pgdata:
