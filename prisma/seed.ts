@@ -104,7 +104,11 @@ async function main() {
   await insertChunked('users', GENERATED.users, (c) =>
     prisma.user.createMany({
       data: c.map((u) => ({
-        id: u.id, name: u.name, email: u.email, phone: u.phone,
+        id: u.id, name: u.name, email: u.email,
+        // 登入代號＝email 前綴（boss/wang/fang/ming），好記、可空 unique
+        // TODO[簽約後填真]：依 INFO-REQUEST.md §B 換成對方指定的登入代號
+        username: u.email.split('@')[0],
+        phone: u.phone,
         passwordHash, globalRole: u.globalRole, isActive: u.isActive,
         createdAt: dt(u.createdAt)!,
       })),
