@@ -376,6 +376,7 @@ export type CaptainRegRow = {
   registrationId: string
   customerId: string
   customerName: string
+  customerPhone: string | null
   customerSkillLevel: SkillLevel | null
   type: 'season_player' | 'season_substitute' | 'walk_in'
   status: 'registered' | 'waitlist' | 'cancelled' | 'attended'
@@ -413,12 +414,13 @@ export type CaptainPortalBundle = {
 
 function mapRegRow(r: {
   id: string; customerId: string; type: string; status: string; updatedAt: Date
-  customer: { name: string; skillLevel: string | null }
+  customer: { name: string; phone: string | null; skillLevel: string | null }
 }): CaptainRegRow {
   return {
     registrationId: r.id,
     customerId: r.customerId,
     customerName: r.customer.name,
+    customerPhone: r.customer.phone,
     customerSkillLevel: fromSkill(r.customer.skillLevel),
     type: r.type as CaptainRegRow['type'],
     status: r.status as CaptainRegRow['status'],
@@ -454,7 +456,7 @@ export async function getCaptainPortalByTokenAsync(token: string): Promise<Capta
     include: {
       registrations: {
         include: {
-          customer: { select: { name: true, skillLevel: true } },
+          customer: { select: { name: true, phone: true, skillLevel: true } },
           payments: { select: { amount: true } },
         },
       },
