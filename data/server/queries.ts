@@ -90,14 +90,15 @@ function venueWhere(visible: string[] | 'all') {
 // ── mappers ─────────────────────────────────────────────────
 type CustomerRow = {
   id: string; name: string; phone: string | null; email: string | null
-  skillLevel: string | null; preferredNetHeight: string | null; notes: string | null
-  isBanned: boolean; createdAt: Date
+  skillLevel: string | null; preferredNetHeight: string | null; gender: string | null
+  notes: string | null; isBanned: boolean; createdAt: Date
 }
 function mapCustomer(c: CustomerRow): Customer {
   return {
     id: c.id, name: c.name, phone: c.phone, email: c.email,
     skillLevel: (fromSkill(c.skillLevel) ?? 'E') as SkillLevel,
     preferredNetHeight: (c.preferredNetHeight ?? 'adjustable') as Customer['preferredNetHeight'],
+    gender: (c.gender ?? null) as Customer['gender'],
     notes: c.notes, isBanned: c.isBanned, createdAt: iso(c.createdAt)!,
   }
 }

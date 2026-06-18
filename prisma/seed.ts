@@ -122,19 +122,13 @@ async function main() {
     prisma.userVenueRole.createMany({ data: c.map((r) => ({ ...r })) }),
   )
 
-  // §D 客戶（phone 在 schema 為 unique → 去重，重複者設 null，不影響 FK 以 id 連）
-  const seenPhones = new Set<string>()
-  const customerRows = GENERATED.customers.map((cust) => {
-    let phone = cust.phone
-    if (phone && seenPhones.has(phone)) phone = null
-    if (phone) seenPhones.add(phone)
-    return {
-      id: cust.id, name: cust.name, phone, email: cust.email,
-      skillLevel: skill(cust.skillLevel) as never,
-      preferredNetHeight: cust.preferredNetHeight,
-      notes: cust.notes, isBanned: cust.isBanned, createdAt: dt(cust.createdAt)!,
-    }
-  })
+  // §D 客戶（phone 不再 unique → 不去重；gender 種子未提供，預設 null）
+  const customerRows = GENERATED.customers.map((cust) => ({
+    id: cust.id, name: cust.name, phone: cust.phone, email: cust.email,
+    skillLevel: skill(cust.skillLevel) as never,
+    preferredNetHeight: cust.preferredNetHeight,
+    notes: cust.notes, isBanned: cust.isBanned, createdAt: dt(cust.createdAt)!,
+  }))
   await insertChunked('customers', customerRows, (c) => prisma.customer.createMany({ data: c }))
 
   // §C 季

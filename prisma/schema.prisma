@@ -118,10 +118,12 @@ enum VenueRole {
 model Customer {
   id                 String      @id @default(uuid())
   name               String      @db.VarChar(100)
-  phone              String?     @unique @db.VarChar(20)
+  // 電話不再唯一：允許「同號碼新增為不同人」（報名自助建檔的三選一之一）
+  phone              String?     @db.VarChar(20)
   email              String?     @db.VarChar(255)
   skillLevel         SkillLevel? @map("skill_level")
   preferredNetHeight NetHeight?  @map("preferred_net_height")
+  gender             Gender?
   notes              String?
   isBanned           Boolean     @default(false) @map("is_banned")
   createdAt          DateTime    @default(now()) @map("created_at")
@@ -155,6 +157,13 @@ enum NetHeight {
   female
   male
   adjustable
+}
+
+/// 性別 — 報名自助建檔用（male 男 / female 女 / undisclosed 不透露）
+enum Gender {
+  male
+  female
+  undisclosed
 }
 
 

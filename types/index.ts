@@ -151,6 +151,9 @@ export const SKILL_LEVEL_DESC: Record<SkillLevel, string> = {
 /** 網高選項 */
 export type NetHeight = 'female' | 'male' | 'adjustable'
 
+/** 性別（報名自助建檔用）— male 男 / female 女 / undisclosed 不透露 */
+export type Gender = 'male' | 'female' | 'undisclosed'
+
 /** 網高的人類可讀標籤 */
 export const NET_HEIGHT_LABEL: Record<NetHeight, string> = {
   female:     '女網 (2.24m)',
@@ -177,6 +180,8 @@ export interface Customer {
   skillLevel: SkillLevel | null
   /** 偏好網高 */
   preferredNetHeight: NetHeight | null
+  /** 性別（報名自助建檔用；可不透露。舊資料可能無此欄位）*/
+  gender?: Gender | null
   /** 客戶備註（館長記錄用，例：「態度好」、「常遲到」） */
   notes: string | null
   /** 是否被禁止報名 */
