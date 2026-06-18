@@ -369,3 +369,141 @@ export async function getSeasonRentalByTokenAsync(token: string): Promise<{ rent
   const expired = r.accessTokenExpiresAt.getTime() < Date.now()
   return { rental: mapSeasonRental(r), expired }
 }
+
+// ── 主揪 portal 完整資料包（Round 8A）─────────────────────────
+// 一次查好整個 rental 的場次 + 名單，client 端純渲染、本地切換場次。
+export type CaptainRegRow = {
+  registrationId: string
+  customerId: string
+  customerName: string
+  customerSkillLevel: SkillLevel | null
+  type: 'season_player' | 'season_substitute' | 'walk_in'
+  status: 'registered' | 'waitlist' | 'cancelled' | 'attended'
+  updatedAt: string
+}
+export type CaptainSessionBundle = {
+  session: Session
+  isPast: boolean
+  isToday: boolean
+  seasonPlayerCount: number
+  substituteCount: number
+  walkInCount: number
+  feePerPaidPerson: number
+  expectedRevenue: number
+  paymentCollected: number
+  /** 季打名單（含請假/cancelled，供請假切換）*/
+  seasonPlayersWithLeave: CaptainRegRow[]
+  substitutes: CaptainRegRow[]
+  walkIns: CaptainRegRow[]
+}
+export type CaptainPortalBundle = {
+  rental: SeasonRental
+  tokenStatus: 'active' | 'expired'
+  seasonPlayerCount: number
+  totalSessions: number
+  pastSessions: number
+  upcomingSessions: number
+  paidAmount: number
+  expectedAmount: number
+  outstandingAmount: number
+  paidRatio: number
+  isPaymentCritical: boolean
+  sessions: CaptainSessionBundle[]
+}
+
+function mapRegRow(r: {
+  id: string; customerId: string; type: string; status: string; updatedAt: Date
+  customer: { name: string; skillLevel: string | null }
+}): CaptainRegRow {
+  return {
+    registrationId: r.id,
+    customerId: r.customerId,
+    customerName: r.customer.name,
+    customerSkillLevel: fromSkill(r.customer.skillLevel),
+    type: r.type as CaptainRegRow['type'],
+    status: r.status as CaptainRegRow['status'],
+    updatedAt: iso(r.updatedAt)!,
+  }
+}
+
+/**
+ * 主揪 token → 完整 portal 資料（找不到回 null）。
+ * 授權：場次範圍 scope 死在查詢（同 rental.timeslotId + 該季日期區間），
+ * 主揪只看得到自己 rental 的場次。
+ */
+export async function getCaptainPortalByTokenAsync(token: string): Promise<CaptainPortalBundle | null> {
+  const r = await prisma.seasonRental.findUnique({
+    where: { accessToken: token },
+    include: {
+      captain: { select: { name: true, phone: true } },
+      season: { select: { name: true, startDate: true, endDate: true } },
+      timeslot: { select: { label: true, startTime: true, endTime: true, venue: { select: { name: true } } } },
+    },
+  })
+  if (!r) return null
+
+  const today = new Date().toISOString().split('T')[0]
+  const tokenStatus: 'active' | 'expired' = r.accessTokenExpiresAt.getTime() < Date.now() ? 'expired' : 'active'
+
+  // 該 rental 範圍內的場次（同 timeslot + 該季日期區間）— 對齊 _findCaptainSessions
+  const sessionRows = await prisma.session.findMany({
+    where: {
+      timeslotId: r.timeslotId,
+      sessionDate: { gte: r.season.startDate, lte: r.season.endDate },
+    },
+    include: {
+      registrations: {
+        include: {
+          customer: { select: { name: true, skillLevel: true } },
+          payments: { select: { amount: true } },
+        },
+      },
+    },
+    orderBy: { sessionDate: 'asc' },
+  })
+
+  const seasonPlayerIds = new Set<string>()
+  const sessions: CaptainSessionBundle[] = sessionRows.map((s) => {
+    const ymdDate = ymd(s.sessionDate)
+    const active = s.registrations.filter((rg) => rg.status !== 'cancelled')
+    const sp = active.filter((rg) => rg.type === 'season_player')
+    const sub = active.filter((rg) => rg.type === 'season_substitute')
+    const wi = active.filter((rg) => rg.type === 'walk_in')
+    sp.forEach((rg) => seasonPlayerIds.add(rg.customerId))
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const paymentCollected = active.reduce(
+      (sum, rg) => sum + rg.payments.reduce((a, p) => a + p.amount, 0), 0,
+    )
+    return {
+      session: mapSession(s),
+      isPast: ymdDate < today,
+      isToday: ymdDate === today,
+      seasonPlayerCount: sp.length,
+      substituteCount: sub.length,
+      walkInCount: wi.length,
+      feePerPaidPerson: fee,
+      expectedRevenue: (sub.length + wi.length) * fee,
+      paymentCollected,
+      // 季打名單含 cancelled（請假切換用）；補位/臨打只列未取消
+      seasonPlayersWithLeave: s.registrations.filter((rg) => rg.type === 'season_player').map(mapRegRow),
+      substitutes: sub.map(mapRegRow),
+      walkIns: wi.map(mapRegRow),
+    }
+  })
+
+  const outstandingAmount = r.totalAmount - r.paidAmount
+  return {
+    rental: mapSeasonRental(r),
+    tokenStatus,
+    seasonPlayerCount: seasonPlayerIds.size,
+    totalSessions: sessions.length,
+    pastSessions: sessions.filter((s) => s.isPast).length,
+    upcomingSessions: sessions.filter((s) => !s.isPast && !s.isToday).length,
+    paidAmount: r.paidAmount,
+    expectedAmount: r.totalAmount,
+    outstandingAmount,
+    paidRatio: r.totalAmount > 0 ? r.paidAmount / r.totalAmount : 0,
+    isPaymentCritical: outstandingAmount > 0,
+    sessions,
+  }
+}

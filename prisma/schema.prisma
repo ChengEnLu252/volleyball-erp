@@ -355,6 +355,8 @@ model Registration {
   status              RegistrationStatus  @default(registered)
   notes               String?
   registeredAt        DateTime            @default(now()) @map("registered_at")
+  /// 樂觀鎖用：每次 update 自動 bump（主揪/工讀生同時編輯時偵測衝突）
+  updatedAt           DateTime            @updatedAt @map("updated_at")
 
   // ── 自助回報付款（僅無人場次使用）──────────────────────────
   /// 客戶在系統按下「我已付款」
