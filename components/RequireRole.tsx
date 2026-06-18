@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { signOut } from 'next-auth/react'
 import {
-  getCurrentUser, getEffectiveRole, getPageAccess,
-  logout as apiLogout,
+  getCurrentUser, getCurrentEffectiveRole, getCurrentPageAccess,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import { EFFECTIVE_ROLE_LABEL, PAGE_LABEL, type PageKey } from '@/data/permissions'
@@ -58,13 +58,12 @@ export default function RequireRole({ page, children }: RequireRoleProps) {
 
   const user = getCurrentUser()
   if (!user) {
-    // 理論上 demo 永遠有 currentUser，但保底處理
     return <DeniedCard page={page} reason="尚未登入" onSessions={() => router.push('/sessions')} />
   }
 
-  const access = getPageAccess(user.id, page)
+  const access = getCurrentPageAccess(page)
   if (access === 'denied') {
-    return <DeniedCard page={page} reason={composeReason(user.id)} onSessions={() => router.push('/sessions')} />
+    return <DeniedCard page={page} reason={composeReason()} onSessions={() => router.push('/sessions')} />
   }
 
   return <>{children}</>
@@ -75,8 +74,8 @@ export default function RequireRole({ page, children }: RequireRoleProps) {
 // 403 卡片
 // ============================================================
 
-function composeReason(userId: string): string {
-  const role = getEffectiveRole(userId)
+function composeReason(): string {
+  const role = getCurrentEffectiveRole()
   const label = EFFECTIVE_ROLE_LABEL[role]
   return `您目前的角色「${label}」沒有此頁的權限。`
 }
@@ -88,11 +87,10 @@ interface DeniedCardProps {
 }
 
 function DeniedCard({ page, reason, onSessions }: DeniedCardProps) {
-  const user = getCurrentUser()
-  const role = user ? getEffectiveRole(user.id) : 'none'
+  const role = getCurrentEffectiveRole()
 
   const onLogoutClick = () => {
-    apiLogout()
+    void signOut({ callbackUrl: '/dashboard' })
   }
 
   return (

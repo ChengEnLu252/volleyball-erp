@@ -15,6 +15,7 @@ import NextAuth from 'next-auth'
 import Credentials from 'next-auth/providers/credentials'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@/lib/prisma'
+import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: 'jwt' },
@@ -40,26 +41,51 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const ok = await bcrypt.compare(password, user.passwordHash)
         if (!ok) return null
 
+        // 一併算出 effective role + 可見球館，放進 session（後端授權與前端 UX 都用）
+        const venueRoles = await prisma.userVenueRole.findMany({ where: { userId: user.id } })
+        const role: EffectiveRole = deriveEffectiveRole(
+          user.globalRole,
+          venueRoles.map((r) => ({ userId: r.userId, venueId: r.venueId, role: r.role })),
+        )
+        const visibleVenueIds: string[] | 'all' =
+          role === 'owner' ? 'all'
+          : role === 'none' ? []
+          : Array.from(new Set(venueRoles.map((r) => r.venueId)))
+
         // 回傳值會進 jwt callback 的 user
-        return { id: user.id, name: user.name, globalRole: user.globalRole }
+        return {
+          id: user.id, name: user.name, globalRole: user.globalRole,
+          role, visibleVenueIds,
+        }
       },
     }),
   ],
   callbacks: {
-    // 登入當下把 userId / globalRole 寫進 JWT
+    // 登入當下把 userId / globalRole / role / visibleVenueIds 寫進 JWT
     async jwt({ token, user }) {
       if (user) {
-        token.userId = (user as { id: string }).id
-        token.globalRole = (user as { globalRole: 'owner' | 'staff' }).globalRole
+        const u = user as {
+          id: string; globalRole: 'owner' | 'staff'
+          role: EffectiveRole; visibleVenueIds: string[] | 'all'
+        }
+        token.userId = u.id
+        token.globalRole = u.globalRole
+        token.role = u.role
+        token.visibleVenueIds = u.visibleVenueIds
       }
       return token
     },
-    // 讓 server 端 auth() 取得的 session 帶上 userId / globalRole
+    // 讓 server / client 取得的 session 帶上這些欄位
     async session({ session, token }) {
       if (session.user) {
-        ;(session.user as { id?: string }).id = token.userId as string
-        ;(session.user as { globalRole?: 'owner' | 'staff' }).globalRole =
-          token.globalRole as 'owner' | 'staff'
+        const su = session.user as {
+          id?: string; globalRole?: 'owner' | 'staff'
+          role?: EffectiveRole; visibleVenueIds?: string[] | 'all'
+        }
+        su.id = token.userId as string
+        su.globalRole = token.globalRole as 'owner' | 'staff'
+        su.role = token.role as EffectiveRole
+        su.visibleVenueIds = token.visibleVenueIds as string[] | 'all'
       }
       return session
     },

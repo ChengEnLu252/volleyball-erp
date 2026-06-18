@@ -1751,6 +1751,28 @@ export function getIsAuthenticated(): boolean {
   return diff.isAuthenticated
 }
 
+// ── Round 5：Auth.js session 使用者覆蓋層 ─────────────────────
+// 由 SessionBridge 於登入後寫入（記憶體，不進 localStorage —— 每次開機
+// 都從 session 重新灌）。data/api.ts 的「目前使用者」一律以此為準，
+// 使「新註冊的 DB 使用者」（不在 generator 種子內）也能正確 scope。
+export type SessionUserOverride = {
+  id: string
+  name: string
+  globalRole: 'owner' | 'staff'
+  role: 'owner' | 'manager' | 'staff' | 'none'
+  visibleVenueIds: string[] | 'all'
+}
+let sessionUserOverride: SessionUserOverride | null = null
+
+export function setSessionUserOverride(u: SessionUserOverride | null): void {
+  sessionUserOverride = u
+  notify()
+}
+
+export function getSessionUserOverride(): SessionUserOverride | null {
+  return sessionUserOverride
+}
+
 /**
  * 取得目前所有上傳憑證的 meta。
  *

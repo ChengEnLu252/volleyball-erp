@@ -10,19 +10,19 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { signOut } from 'next-auth/react'
 import {
-  getCurrentUser, getEffectiveRole, getUserRoleLabel,
-  listAccessiblePages, listAllUsers, login as apiLogin, logout as apiLogout,
+  getCurrentUser, getCurrentEffectiveRole, getCurrentRoleLabel,
+  listCurrentAccessiblePages,
   getMyUnreadNotificationCount, getPendingOrderCount,
 } from '@/data/api'
 import { hydrateStore, useStoreSync } from '@/data/store'
-import type { PageKey } from '@/data/permissions'
+import type { EffectiveRole, PageKey } from '@/data/permissions'
 import { COLORS, FONTS } from './theme/tokens'
 import QiuQiu from './QiuQiu'
 
-// 角色顏色 — 改用 token 統一管理（取代舊金/藍/灰）
-function roleColor(userId: string): string {
-  const role = getEffectiveRole(userId)
+// 角色顏色 — 改用 token 統一管理
+function roleColorFor(role: EffectiveRole): string {
   if (role === 'owner')   return COLORS.roleOwner    // 粉
   if (role === 'manager') return COLORS.roleManager  // 紫
   if (role === 'staff')   return COLORS.roleStaff    // 灰粉
@@ -98,11 +98,6 @@ export default function Sidebar() {
   const [pickerOpen, setPickerOpen] = useState(false)
   const pathname = usePathname()
 
-  // 階段 14：切換身份的密碼 modal 狀態
-  const [switchTargetId, setSwitchTargetId] = useState<string | null>(null)
-  const [switchPassword, setSwitchPassword] = useState('')
-  const [switchError, setSwitchError] = useState('')
-
   useStoreSync()
 
   const [mounted, setMounted] = useState(false)
@@ -112,10 +107,9 @@ export default function Sidebar() {
   }, [])
 
   const currentUser = getCurrentUser()
-  const allUsers = listAllUsers()
 
   const accessibleSet: Set<PageKey> = mounted && currentUser
-    ? new Set(listAccessiblePages(currentUser.id))
+    ? new Set(listCurrentAccessiblePages())
     : new Set(ALL_LINKS.map(l => l.pageKey))
 
   const visibleLinks = ALL_LINKS.filter(l => accessibleSet.has(l.pageKey))
@@ -125,46 +119,7 @@ export default function Sidebar() {
   // 階段 17：待處理訂單數（商城訂單 badge）
   const pendingOrders = mounted && currentUser ? getPendingOrderCount() : 0
 
-  const requestSwitch = (userId: string) => {
-    if (userId === currentUser?.id) {
-      setPickerOpen(false)
-      return
-    }
-    setSwitchTargetId(userId)
-    setSwitchPassword('')
-    setSwitchError('')
-    setPickerOpen(false)
-  }
-
-  const confirmSwitch = () => {
-    if (!switchTargetId) return
-    if (!switchPassword) {
-      setSwitchError('請輸入密碼')
-      return
-    }
-    const ok = apiLogin(switchTargetId, switchPassword)
-    if (!ok) {
-      setSwitchError('密碼錯誤')
-      setSwitchPassword('')
-      return
-    }
-    setSwitchTargetId(null)
-    setSwitchPassword('')
-    setSwitchError('')
-  }
-
-  const cancelSwitch = () => {
-    setSwitchTargetId(null)
-    setSwitchPassword('')
-    setSwitchError('')
-  }
-
-  const onLogout = () => {
-    apiLogout()
-  }
-
-  const switchTargetUser = switchTargetId ? allUsers.find(u => u.id === switchTargetId) : null
-  const switchTargetLabel = switchTargetId && mounted ? getUserRoleLabel(switchTargetId) : ''
+  const onLogout = () => { void signOut({ callbackUrl: '/dashboard' }) }
 
   const NavContent = () => (
     <div style={{ flex: 1, overflowY: 'auto', position: 'relative', zIndex: 1 }}>
@@ -303,8 +258,8 @@ export default function Sidebar() {
     </div>
   )
 
-  const currentRoleLabel = mounted && currentUser ? getUserRoleLabel(currentUser.id) : '—'
-  const currentRoleColor = mounted && currentUser ? roleColor(currentUser.id) : COLORS.pink500
+  const currentRoleLabel = mounted && currentUser ? getCurrentRoleLabel() : '—'
+  const currentRoleColor = mounted && currentUser ? roleColorFor(getCurrentEffectiveRole()) : COLORS.pink500
 
   return (
     <>
@@ -359,7 +314,7 @@ export default function Sidebar() {
           <QiuQiu variant="mini" size={58} />
         </div>
 
-        {/* —— 底部：使用者切換 —— */}
+        {/* —— 底部：目前使用者 + 登出 —— */}
         <div style={{
           padding: '11px 14px',
           borderTop: `1px solid rgba(255,45,138,0.22)`,
@@ -377,51 +332,17 @@ export default function Sidebar() {
               boxShadow: '0 -8px 24px -4px rgba(255,45,138,0.25), 0 0 0 1px rgba(255,45,138,0.06)',
               marginBottom: 6, overflow: 'hidden',
             }}>
-              <div className="vop-mono" style={{
-                padding: '9px 12px', fontSize: 9, color: COLORS.pink700,
-                fontWeight: 800, letterSpacing: '0.14em',
-                background: COLORS.pink50,
-                borderBottom: `1px solid ${COLORS.pink100}`,
-              }}>
-                [ SWITCH IDENTITY ]
-              </div>
-              {allUsers.map(u => {
-                const active = currentUser?.id === u.id
-                return (
-                  <button key={u.id}
-                    onClick={() => requestSwitch(u.id)}
-                    style={{
-                      width: '100%', textAlign: 'left',
-                      padding: '10px 12px', border: 'none', cursor: 'pointer',
-                      background: active ? COLORS.pink50 : '#fff',
-                      color: active ? COLORS.ink900 : COLORS.ink700,
-                      fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      borderBottom: `1px solid ${COLORS.pink50}`,
-                      transition: 'background 0.15s ease',
-                    }}>
-                    <span>
-                      <span style={{ color: roleColor(u.id), fontWeight: 700 }}>{u.name}</span>
-                      <span style={{ color: COLORS.ink300, marginLeft: 6, fontSize: 11 }}>
-                        {mounted ? getUserRoleLabel(u.id) : u.globalRole}
-                      </span>
-                    </span>
-                    {active && <span style={{ color: COLORS.pink500, fontSize: 12 }}>✓</span>}
-                  </button>
-                )
-              })}
-              <div style={{ borderTop: `1px solid ${COLORS.pink100}` }}>
-                <button
-                  onClick={() => { setPickerOpen(false); onLogout() }}
-                  style={{
-                    width: '100%', textAlign: 'left',
-                    padding: '10px 12px', border: 'none', cursor: 'pointer',
-                    background: 'transparent', color: COLORS.danger,
-                    fontSize: 12, fontWeight: 600,
-                    display: 'flex', alignItems: 'center', gap: 6,
-                  }}>
-                  <span>↩</span><span>登出</span>
-                </button>
-              </div>
+              <button
+                onClick={() => { setPickerOpen(false); onLogout() }}
+                style={{
+                  width: '100%', textAlign: 'left',
+                  padding: '11px 12px', border: 'none', cursor: 'pointer',
+                  background: 'transparent', color: COLORS.danger,
+                  fontSize: 12, fontWeight: 700,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                <span>↩</span><span>登出</span>
+              </button>
             </div>
           )}
 
@@ -505,117 +426,6 @@ export default function Sidebar() {
           #mobile-topbar { display: flex !important; }
         }
       `}</style>
-
-      {/* —— 階段 14：切換身份的密碼 modal —— */}
-      {switchTargetId && switchTargetUser && (
-        <div
-          onClick={cancelSwitch}
-          style={{
-            position: 'fixed', inset: 0, zIndex: 200,
-            background: 'rgba(45,27,46,0.6)',
-            backdropFilter: 'blur(4px)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 20,
-          }}>
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{
-              background: '#fff', borderRadius: 16,
-              padding: '24px 22px', width: '100%', maxWidth: 360,
-              boxShadow: '0 24px 60px -12px rgba(255,45,138,0.3), 0 0 0 1px rgba(255,45,138,0.12)',
-              position: 'relative', overflow: 'hidden',
-            }}>
-            {/* 角落 HUD 標記 */}
-            <span style={{ position:'absolute', top:8, left:8, width:9, height:9, borderTop:`1.6px solid ${COLORS.pink500}`, borderLeft:`1.6px solid ${COLORS.pink500}` }} />
-            <span style={{ position:'absolute', top:8, right:8, width:9, height:9, borderTop:`1.6px solid ${COLORS.pink500}`, borderRight:`1.6px solid ${COLORS.pink500}` }} />
-            <span style={{ position:'absolute', bottom:8, left:8, width:9, height:9, borderBottom:`1.6px solid ${COLORS.pink500}`, borderLeft:`1.6px solid ${COLORS.pink500}` }} />
-            <span style={{ position:'absolute', bottom:8, right:8, width:9, height:9, borderBottom:`1.6px solid ${COLORS.pink500}`, borderRight:`1.6px solid ${COLORS.pink500}` }} />
-
-            <div style={{ textAlign: 'center', marginBottom: 18 }}>
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 6 }}>
-                <QiuQiu variant="face" size={52} />
-              </div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.ink900 }}>
-                切換到 {switchTargetUser.name}
-              </div>
-              <div style={{
-                fontSize: 12, color: roleColor(switchTargetUser.id),
-                marginTop: 4, fontWeight: 700,
-              }}>
-                {switchTargetLabel}
-              </div>
-            </div>
-
-            <div className="vop-mono" style={{
-              fontSize: 10, color: COLORS.pink700,
-              marginBottom: 6, fontWeight: 800, letterSpacing: '0.14em',
-            }}>
-              [ PASSWORD ]
-            </div>
-            <input
-              type="password"
-              value={switchPassword}
-              onChange={e => { setSwitchPassword(e.target.value); setSwitchError('') }}
-              onKeyDown={e => {
-                if (e.key === 'Enter') confirmSwitch()
-                if (e.key === 'Escape') cancelSwitch()
-              }}
-              placeholder="輸入 4 位數密碼"
-              autoFocus
-              style={{
-                width: '100%', boxSizing: 'border-box',
-                padding: '11px 14px', borderRadius: 10,
-                border: switchError ? `1.5px solid ${COLORS.danger}` : `1.5px solid ${COLORS.pink200}`,
-                fontSize: 15, outline: 'none',
-                marginBottom: switchError ? 6 : 14,
-                fontFamily: FONTS.mono,
-                letterSpacing: '0.2em',
-                color: COLORS.ink900,
-                background: COLORS.pink50,
-              }}
-            />
-
-            {switchError && (
-              <div style={{ fontSize: 12, color: COLORS.danger, marginBottom: 14, fontWeight: 600 }}>
-                ⚠ {switchError}
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={cancelSwitch}
-                style={{
-                  flex: 1, padding: '11px 14px',
-                  background: '#fff', color: COLORS.ink700,
-                  border: `1.5px solid ${COLORS.pink200}`, borderRadius: 10,
-                  fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                }}>
-                取消
-              </button>
-              <button
-                onClick={confirmSwitch}
-                style={{
-                  flex: 1, padding: '11px 14px',
-                  background: `linear-gradient(95deg, ${COLORS.pink500} 0%, ${COLORS.pink400} 100%)`,
-                  color: '#fff',
-                  border: 'none', borderRadius: 10,
-                  fontSize: 13, fontWeight: 800, cursor: 'pointer',
-                  boxShadow: '0 4px 14px -2px rgba(255,45,138,0.5), inset 0 1px 0 rgba(255,255,255,0.3)',
-                  letterSpacing: '0.04em',
-                }}>
-                確認切換
-              </button>
-            </div>
-
-            <div className="vop-mono" style={{
-              marginTop: 14, fontSize: 10, color: COLORS.ink300,
-              textAlign: 'center', letterSpacing: '0.08em',
-            }}>
-              💡 DEMO · 預設密碼皆為 <strong style={{ color: COLORS.pink500 }}>0000</strong>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   )
 }

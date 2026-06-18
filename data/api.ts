@@ -1763,6 +1763,9 @@ import {
   // 階段 14：登入狀態
   getIsAuthenticated as storeGetIsAuthenticated,
   setIsAuthenticated as storeSetIsAuthenticated,
+  // Round 5：Auth.js session 覆蓋層
+  getSessionUserOverride, setSessionUserOverride,
+  type SessionUserOverride,
 } from './store'
 
 // ── 7.1 ID / token 產生（runtime，不走 Mulberry seed） ─────────
@@ -2281,8 +2284,18 @@ export function listAuditLogs(filter: AuditLogFilter = {}): AuditLog[] {
 // ── 7.7 Current user（最小版「假登入」）──────────────────────
 
 export function getCurrentUser(): User | null {
-  const uid = getCurrentUserId()
-  return GENERATED.users.find(u => u.id === uid) ?? null
+  // Round 5：以 Auth.js session 覆蓋層為準（新 DB 使用者不在 generator 種子內）
+  const o = getSessionUserOverride()
+  if (o) {
+    const seed = GENERATED.users.find(u => u.id === o.id)
+    if (seed) return seed
+    // 非種子使用者 → 以 session 資訊組出 User 形狀
+    return {
+      id: o.id, name: o.name, email: '', phone: null,
+      globalRole: o.globalRole, isActive: true, createdAt: '',
+    }
+  }
+  return null  // fail-closed：無 session 視為未登入
 }
 
 /** 切換登入身份（給 sidebar dropdown 用）*/
@@ -2385,14 +2398,53 @@ export function getEffectiveRole(userId: string): EffectiveRole {
   return deriveEffectiveRole(user.globalRole, venueRoles)
 }
 
-/** 目前登入 user 的 effective role */
+/** 目前登入 user 的 effective role（Round 5：以 session 覆蓋層為準，fail-closed）*/
 export function getCurrentEffectiveRole(): EffectiveRole {
-  return getEffectiveRole(getCurrentUserId())
+  return getSessionUserOverride()?.role ?? 'none'
 }
 
 /** user 對某 page 的存取等級 */
 export function getPageAccess(userId: string, page: PageKey): PageAccess {
   return lookupPageAccess(page, getEffectiveRole(userId))
+}
+
+/** 目前登入 user 對某 page 的存取等級（用 session role；RequireRole 用）*/
+export function getCurrentPageAccess(page: PageKey): PageAccess {
+  return lookupPageAccess(page, getCurrentEffectiveRole())
+}
+
+/** 目前登入 user 可存取的所有 page（Sidebar 用）*/
+export function listCurrentAccessiblePages(): PageKey[] {
+  const role = getCurrentEffectiveRole()
+  return (Object.keys(PAGE_ACCESS_MATRIX) as PageKey[])
+    .filter(p => lookupPageAccess(p, role) !== 'denied')
+}
+
+/** 目前登入 user 的角色標籤（如「館長 · 飛翼」）*/
+export function getCurrentRoleLabel(): string {
+  const o = getSessionUserOverride()
+  if (!o) return '—'
+  const venueNames = o.visibleVenueIds === 'all'
+    ? []
+    : o.visibleVenueIds
+        .map(id => GENERATED.venues.find(v => v.id === id)?.name)
+        .filter((n): n is string => !!n)
+  return composeRoleLabel(o.role, venueNames)
+}
+
+/**
+ * Round 5：由 SessionBridge 在 Auth.js 登入後呼叫，把 session 使用者
+ * 灌進 store（覆蓋層 + currentUserId），使既有同步讀取一致反映真身分。
+ * 傳 null = 登出。
+ */
+export function syncSessionUser(u: SessionUserOverride | null): void {
+  setSessionUserOverride(u)
+  if (u) {
+    storeSetCurrentUserId(u.id)
+    storeSetIsAuthenticated(true)
+  } else {
+    storeSetIsAuthenticated(false)
+  }
 }
 
 /** 簡化 boolean 版（true = 可看，false = 被擋） */
@@ -2420,9 +2472,9 @@ export function getVisibleVenueIds(userId: string): string[] | 'all' {
   return Array.from(new Set(venueIds))
 }
 
-/** 目前登入 user 的可見 venue id 集合 */
+/** 目前登入 user 的可見 venue id 集合（Round 5：以 session 覆蓋層為準，fail-closed）*/
 export function getCurrentVisibleVenueIds(): string[] | 'all' {
-  return getVisibleVenueIds(getCurrentUserId())
+  return getSessionUserOverride()?.visibleVenueIds ?? []
 }
 
 /** 資料過濾 helper — venueId 是否在 visible 集合內 */

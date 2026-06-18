@@ -11,6 +11,7 @@
 // ============================================================
 
 import { usePathname } from 'next/navigation'
+import { SessionProvider } from 'next-auth/react'
 import Sidebar from './Sidebar'
 import LayoutGuard from './LayoutGuard'
 import LoginGate from './LoginGate'
@@ -27,15 +28,17 @@ export default function ChromeShell({ children }: { children: React.ReactNode })
     return <>{children}</>
   }
 
-  // ERP — 登入閘門 → 既有 sidebar + guard 結構
+  // ERP — Auth.js session provider → 登入閘門 → 既有 sidebar + guard 結構
   return (
-    <LoginGate>
-      <div style={{ display: 'flex', minHeight: '100vh' }}>
-        <Sidebar />
-        <main style={{ flex: 1, overflow: 'auto' }}>
-          <LayoutGuard>{children}</LayoutGuard>
-        </main>
-      </div>
-    </LoginGate>
+    <SessionProvider>
+      <LoginGate>
+        <div style={{ display: 'flex', minHeight: '100vh' }}>
+          <Sidebar />
+          <main style={{ flex: 1, overflow: 'auto' }}>
+            <LayoutGuard>{children}</LayoutGuard>
+          </main>
+        </div>
+      </LoginGate>
+    </SessionProvider>
   )
 }
