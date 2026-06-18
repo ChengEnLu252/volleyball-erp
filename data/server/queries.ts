@@ -151,6 +151,39 @@ function mapSeasonRental(r: any): SeasonRental {
   }
 }
 
+// ── 註冊 / 審核（Round 5C）──────────────────────────────────
+/** 公開：啟用中的球館（註冊表單選球館用，無需登入）*/
+export async function getActiveVenuesPublic(): Promise<{ id: string; name: string }[]> {
+  return prisma.venue.findMany({
+    where: { isActive: true },
+    select: { id: true, name: true },
+    orderBy: { id: 'asc' },
+  })
+}
+
+export type PendingUserRow = {
+  id: string
+  name: string
+  username: string | null
+  createdAt: string
+  venues: { venueName: string; role: 'manager' | 'staff' }[]
+}
+/** owner 審核頁：列出待審核帳號 + 其申請的球館/職位 */
+export async function getPendingUsers(): Promise<PendingUserRow[]> {
+  const rows = await prisma.user.findMany({
+    where: { approvalStatus: 'pending' },
+    include: { venueRoles: { include: { venue: { select: { name: true } } } } },
+    orderBy: { createdAt: 'asc' },
+  })
+  return rows.map((u) => ({
+    id: u.id,
+    name: u.name,
+    username: u.username,
+    createdAt: iso(u.createdAt)!,
+    venues: u.venueRoles.map((vr) => ({ venueName: vr.venue.name, role: vr.role })),
+  }))
+}
+
 // ── 球館 / 季 / 時段（基礎讀取）────────────────────────────
 export async function getVenuesForUserAsync(scope: UserScope): Promise<Venue[]> {
   const rows = await prisma.venue.findMany({

@@ -75,6 +75,7 @@ const ALL_LINKS: NavLink[] = [
   { pageKey: 'goals',            href: '/goals',            label: '館長目標',     icon: '🎯', group: 'people' },
   { pageKey: 'captains',         href: '/captains',         label: '主揪管理',     icon: '🪝', group: 'people' },
   // 系統
+  { pageKey: 'approvals',        href: '/approvals',        label: '帳號審核',     icon: '🪪', group: 'system' },
   { pageKey: 'audit',            href: '/audit',            label: '操作紀錄',     icon: '🔍', group: 'system' },
   { pageKey: 'evidence',         href: '/evidence',         label: '上傳憑證',     icon: '📎', group: 'system' },
   { pageKey: 'integrations',     href: '/integrations',     label: '整合設定',     icon: '🔗', group: 'system' },

@@ -46,6 +46,8 @@ export type PageKey =
   | 'notifications'
   // 階段 17：線上商城後台訂單管理
   | 'orders'
+  // Round 5C：帳號審核（自助註冊者，僅 owner）
+  | 'approvals'
 
 export const PAGE_LABEL: Record<PageKey, string> = {
   'dashboard':        '總覽',
@@ -67,6 +69,7 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'goals':            '館長目標',
   'notifications':    '通知',
   'orders':           '商城訂單',
+  'approvals':        '帳號審核',
 }
 
 
@@ -131,6 +134,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'notifications':    { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   // 階段 17：商城訂單 — owner 看全部、manager 看自己館取貨單、staff 擋
   'orders':           { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // Round 5C：帳號審核 — 僅 owner
+  'approvals':        { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
 }
 
 
