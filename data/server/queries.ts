@@ -18,6 +18,7 @@
 // ============================================================
 import 'server-only'
 
+import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
 import type {
@@ -235,6 +236,52 @@ export async function getCustomerByIdForUserAsync(scope: UserScope, id: string):
     if (!hit) return null
   }
   return mapCustomer(c)
+}
+
+/**
+ * 客戶頁專用：角色 scope 的客戶 + 每位客戶統計（出席場次數 / 累計消費 / 最近參加）。
+ * 統計用單一聚合查詢（子查詢避免 join 重複計數），對齊既有頁面語意（只計 attended）。
+ */
+export async function getCustomersPageData(scope: UserScope): Promise<{
+  customers: Customer[]
+  stats: Record<string, { sessions: number; amount: number; lastVisit: string | null }>
+}> {
+  const customers = await getCustomersForUserAsync(scope)
+  const stats: Record<string, { sessions: number; amount: number; lastVisit: string | null }> = {}
+  if (customers.length === 0) return { customers, stats }
+
+  const ids = customers.map((c) => c.id)
+  const rows = await prisma.$queryRaw<
+    Array<{ customer_id: string; sessions: bigint; amount: bigint | null; last_visit: Date | string | null }>
+  >`
+    SELECT c.id AS customer_id,
+           COALESCE(a.sessions, 0) AS sessions,
+           COALESCE(pay.amount, 0) AS amount,
+           a.last_visit AS last_visit
+    FROM customers c
+    LEFT JOIN (
+      SELECT r.customer_id, COUNT(*) AS sessions, MAX(s.session_date) AS last_visit
+      FROM registrations r JOIN sessions s ON s.id = r.session_id
+      WHERE r.status = 'attended'
+      GROUP BY r.customer_id
+    ) a ON a.customer_id = c.id
+    LEFT JOIN (
+      SELECT r.customer_id, SUM(p.amount) AS amount
+      FROM payments p JOIN registrations r ON r.id = p.registration_id
+      WHERE r.status = 'attended'
+      GROUP BY r.customer_id
+    ) pay ON pay.customer_id = c.id
+    WHERE c.id IN (${Prisma.join(ids)})
+  `
+  for (const row of rows) {
+    const lv = row.last_visit
+    stats[row.customer_id] = {
+      sessions: Number(row.sessions),
+      amount: Number(row.amount ?? 0),
+      lastVisit: lv == null ? null : (typeof lv === 'string' ? lv.split('T')[0] : ymd(lv)),
+    }
+  }
+  return { customers, stats }
 }
 
 // ── 場次（角色 scope）───────────────────────────────────────
