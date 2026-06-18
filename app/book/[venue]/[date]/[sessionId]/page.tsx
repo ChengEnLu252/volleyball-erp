@@ -24,6 +24,8 @@ import LineLoginModal, {
   getLineUser, clearLineUser, type LineUser,
 } from '@/components/booking/LineLoginModal'
 import { addMyBooking } from '@/data/my-bookings'
+import { submitPublicBooking, type ExistingCustomer } from '@/app/actions/registrations'
+import type { SkillLevel, Gender } from '@/types'
 import {
   BOOKING_COLORS, BOOKING_FONTS, BOOKING_RADIUS,
   SESSION_TYPE_LABEL, SESSION_TYPE_TAG_COLOR,
@@ -45,6 +47,22 @@ interface SkillSelfRate {
   setting: string
   block: string
 }
+
+// 四項技能自評 → 取最高者當客戶整體程度（建檔用）。'B-' 視為 'B'。
+const SKILL_ORDER: SkillLevel[] = ['E', 'D', 'C', 'B', 'B+', 'A', 'A+', 'S', 'S*']
+function normSkill(v: string): SkillLevel {
+  return (v === 'B-' ? 'B' : v) as SkillLevel
+}
+function overallSkill(s: SkillSelfRate): SkillLevel {
+  const vals = [s.attack, s.defense, s.setting, s.block].map(normSkill)
+  return vals.reduce((best, c) => (SKILL_ORDER.indexOf(c) > SKILL_ORDER.indexOf(best) ? c : best), vals[0])
+}
+
+const GENDER_OPTIONS: { value: Gender; label: string }[] = [
+  { value: 'male', label: '男' },
+  { value: 'female', label: '女' },
+  { value: 'undisclosed', label: '不透露' },
+]
 
 export default function SessionDetailPage({ params, searchParams }: {
   params: Promise<{ venue: string; date: string; sessionId: string }>
@@ -71,8 +89,10 @@ export default function SessionDetailPage({ params, searchParams }: {
   }, [])
 
   // 報名表單狀態（要登入後才看得到）
+  const [fullName, setFullName] = useState('')
   const [nickname, setNickname] = useState('')
   const [phone, setPhone] = useState('')
+  const [gender, setGender] = useState<Gender>('undisclosed')
   const [skills, setSkills] = useState<SkillSelfRate>({
     attack: 'C', defense: 'C', setting: 'C', block: 'C',
   })
@@ -80,6 +100,8 @@ export default function SessionDetailPage({ params, searchParams }: {
   const [agreedSkill, setAgreedSkill] = useState(false)
   const [agreedCancel, setAgreedCancel] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  // 手機重複 → 三選一對話框
+  const [dupExisting, setDupExisting] = useState<ExistingCustomer[] | null>(null)
 
   const typeStyle = SESSION_TYPE_TAG_COLOR[session.sessionType] ?? { bg: BOOKING_COLORS.bgSecondary, text: BOOKING_COLORS.textSecondary }
   const totalPrice = session.courtFee + (session.hasAircon ? session.acFee : 0)
@@ -102,20 +124,45 @@ export default function SessionDetailPage({ params, searchParams }: {
     setLineUserState(null)
   }
 
-  async function submit() {
-    if (!agreedSkill || !agreedCancel) {
-      alert('請確認所有同意事項')
-      return
-    }
-    if (!phone) {
-      alert('請填寫聯絡電話')
-      return
-    }
-    setSubmitting(true)
-    // 階段 12 mock — 真實實作會 call addRegistration mutation + audit log
-    await new Promise(r => setTimeout(r, 900))
+  function submit() {
+    if (!agreedSkill || !agreedCancel) { alert('請確認所有同意事項'); return }
+    if (!fullName.trim()) { alert('請填寫姓名'); return }
+    if (!phone.trim()) { alert('請填寫聯絡電話'); return }
+    void doSubmit()
+  }
 
-    // 階段 13：寫入「我的預定」sessionStorage，供 /book/[venue]/me 頁讀取
+  // 真正送出。resolution 在手機重複、客戶於對話框選擇後才帶入。
+  async function doSubmit(
+    resolution?: 'use_existing' | 'overwrite' | 'create_new',
+    existingCustomerId?: string,
+  ) {
+    setSubmitting(true)
+    const res = await submitPublicBooking({
+      sessionId,
+      name: fullName.trim(),
+      phone: phone.trim(),
+      gender,
+      skillLevel: overallSkill(skills),
+      resolution,
+      existingCustomerId,
+    })
+
+    // 手機重複 → 跳對話框讓客戶三選一
+    if (!res.ok && 'needsResolution' in res) {
+      setDupExisting(res.existing)
+      setSubmitting(false)
+      return
+    }
+    if (!res.ok) {
+      alert(res.error)
+      setSubmitting(false)
+      return
+    }
+
+    setDupExisting(null)
+    const waitlisted = res.status === 'waitlist'
+
+    // 「我的預定」sessionStorage（供 /book/[venue]/me 顯示）
     if (lineUser) {
       addMyBooking(lineUser.userId, {
         sessionId,
@@ -126,8 +173,8 @@ export default function SessionDetailPage({ params, searchParams }: {
         startTime: session!.startTime,
         endTime: session!.endTime,
         sessionType: session!.sessionType,
-        registrantName: nickname.trim() || lineUser.displayName,
-        isWaitlist,
+        registrantName: fullName.trim(),
+        isWaitlist: waitlisted,
         totalFee: totalPrice,
         payMethod,
       })
@@ -136,8 +183,8 @@ export default function SessionDetailPage({ params, searchParams }: {
     const qs = new URLSearchParams({
       venue, date, session: sessionId,
       method: payMethod,
-      waitlist: String(isWaitlist),
-      name: lineUser?.displayName ?? '',
+      waitlist: String(waitlisted),
+      name: fullName.trim(),
     })
     router.push(`/book/confirmation?${qs.toString()}`)
   }
@@ -268,6 +315,10 @@ export default function SessionDetailPage({ params, searchParams }: {
       ) : (
         <BookingForm
           lineUser={lineUser}
+          fullName={fullName}
+          setFullName={setFullName}
+          gender={gender}
+          setGender={setGender}
           nickname={nickname}
           setNickname={setNickname}
           phone={phone}
@@ -290,8 +341,80 @@ export default function SessionDetailPage({ params, searchParams }: {
       )}
 
       <LineLoginModal open={loginOpen} onClose={() => setLoginOpen(false)} onSuccess={handleLoginSuccess} />
+
+      {dupExisting && (
+        <DuplicatePhoneDialog
+          phone={phone.trim()}
+          existing={dupExisting}
+          submitting={submitting}
+          onUseExisting={() => doSubmit('use_existing', dupExisting[0]?.id)}
+          onOverwrite={() => doSubmit('overwrite', dupExisting[0]?.id)}
+          onCreateNew={() => doSubmit('create_new')}
+          onCancel={() => setDupExisting(null)}
+        />
+      )}
     </BookingShell>
   )
+}
+
+// 手機重複時的三選一對話框
+function DuplicatePhoneDialog(props: {
+  phone: string
+  existing: ExistingCustomer[]
+  submitting: boolean
+  onUseExisting: () => void
+  onOverwrite: () => void
+  onCreateNew: () => void
+  onCancel: () => void
+}) {
+  const { phone, existing, submitting, onUseExisting, onOverwrite, onCreateNew, onCancel } = props
+  const e = existing[0]
+  return (
+    <div onClick={onCancel} style={{
+      position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.5)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+    }}>
+      <div onClick={ev => ev.stopPropagation()} style={{
+        background: '#fff', borderRadius: BOOKING_RADIUS.card, padding: '22px 22px 18px',
+        width: '100%', maxWidth: 380, boxShadow: '0 24px 60px -12px rgba(0,0,0,0.35)',
+      }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: BOOKING_COLORS.textPrimary, marginBottom: 6 }}>
+          此手機已有報名資料
+        </div>
+        <div style={{ fontSize: 13, color: BOOKING_COLORS.textSecondary, lineHeight: 1.6, marginBottom: 14 }}>
+          號碼 <strong>{phone}</strong> 已存在客戶
+          {e ? <>「<strong>{e.name}</strong>」{existing.length > 1 ? ` 等 ${existing.length} 筆` : ''}</> : null}。
+          要怎麼處理這次報名？
+        </div>
+        <div style={{ display: 'grid', gap: 8 }}>
+          <button disabled={submitting} onClick={onUseExisting} style={dlgBtn(true)}>
+            使用舊資料報名
+          </button>
+          <button disabled={submitting} onClick={onOverwrite} style={dlgBtn(false)}>
+            用這次資料覆蓋更新
+          </button>
+          <button disabled={submitting} onClick={onCreateNew} style={dlgBtn(false)}>
+            兩筆都保留（另建新客戶）
+          </button>
+          <button disabled={submitting} onClick={onCancel} style={{
+            ...dlgBtn(false), border: 'none', color: BOOKING_COLORS.textMuted, marginTop: 2,
+          }}>
+            取消
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function dlgBtn(primary: boolean): React.CSSProperties {
+  return {
+    padding: '12px 14px', borderRadius: BOOKING_RADIUS.md, cursor: 'pointer',
+    fontSize: 14, fontWeight: 700, textAlign: 'center',
+    border: `1.5px solid ${BOOKING_COLORS.pinkDeep}`,
+    background: primary ? BOOKING_COLORS.pinkDeep : '#fff',
+    color: primary ? '#fff' : BOOKING_COLORS.pinkDeep,
+  }
 }
 
 
@@ -365,6 +488,8 @@ function LoginPromptCard({ onClick, isWaitlist }: { onClick: () => void; isWaitl
 
 function BookingForm(props: {
   lineUser: LineUser
+  fullName: string; setFullName: (v: string) => void
+  gender: Gender; setGender: (v: Gender) => void
   nickname: string; setNickname: (v: string) => void
   phone: string; setPhone: (v: string) => void
   skills: SkillSelfRate; setSkills: (v: SkillSelfRate) => void
@@ -379,7 +504,8 @@ function BookingForm(props: {
   onLogout: () => void
 }) {
   const {
-    lineUser, nickname, setNickname, phone, setPhone, skills, setSkills,
+    lineUser, fullName, setFullName, gender, setGender,
+    nickname, setNickname, phone, setPhone, skills, setSkills,
     payMethod, setPayMethod, agreedSkill, setAgreedSkill, agreedCancel, setAgreedCancel,
     submitting, submit, isWaitlist, totalPrice, transferInfo, onLogout,
   } = props
@@ -418,11 +544,32 @@ function BookingForm(props: {
       </section>
 
       {/* 聯絡資料 */}
-      <FormSection title="聯絡資料">
+      <FormSection title="聯絡資料"
+        hint="姓名與手機會用來建立／比對你的客戶資料。">
         <div style={{ display: 'grid', gap: 12 }}>
+          <Field label="姓名" required>
+            <input type="text" value={fullName} onChange={e => setFullName(e.target.value)}
+              placeholder="你的姓名" />
+          </Field>
           <Field label="聯絡電話" required>
             <input type="tel" value={phone} onChange={e => setPhone(e.target.value)}
               placeholder="09xx-xxx-xxx" />
+          </Field>
+          <Field label="性別">
+            <div style={{ display: 'flex', gap: 8 }}>
+              {GENDER_OPTIONS.map(g => {
+                const active = gender === g.value
+                return (
+                  <button key={g.value} type="button" onClick={() => setGender(g.value)} style={{
+                    flex: 1, padding: '10px', borderRadius: BOOKING_RADIUS.md, cursor: 'pointer',
+                    fontSize: 13, fontWeight: 600,
+                    border: `1.5px solid ${active ? BOOKING_COLORS.pinkDeep : BOOKING_COLORS.borderLight}`,
+                    background: active ? BOOKING_COLORS.pinkSoft : BOOKING_COLORS.bgCard,
+                    color: active ? BOOKING_COLORS.pinkDeep : BOOKING_COLORS.textSecondary,
+                  }}>{g.label}</button>
+                )
+              })}
+            </div>
           </Field>
           <Field label="球場暱稱（選填）">
             <input type="text" value={nickname} onChange={e => setNickname(e.target.value)}
