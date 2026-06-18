@@ -110,6 +110,8 @@ async function main() {
         username: u.email.split('@')[0],
         phone: u.phone,
         passwordHash, globalRole: u.globalRole, isActive: u.isActive,
+        // 既有種子帳號（含 owner）一律視為已審核
+        approvalStatus: 'approved',
         createdAt: dt(u.createdAt)!,
       })),
     }),

@@ -34,6 +34,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const user = await prisma.user.findUnique({ where: { username } })
         if (!user || !user.isActive) return null
+        // 未通過老闆審核者不得登入（pending / rejected 一律擋）
+        if (user.approvalStatus !== 'approved') return null
 
         const ok = await bcrypt.compare(password, user.passwordHash)
         if (!ok) return null
