@@ -370,6 +370,166 @@ export async function getSeasonRentalByTokenAsync(token: string): Promise<{ rent
   return { rental: mapSeasonRental(r), expired }
 }
 
+// ── Dashboard（Round 9D，忠實重現）───────────────────────────
+export type DashVenue = {
+  venueId: string; venueName: string
+  totalRevenue: number; totalPlayers: number; totalSessions: number
+  unpaidCount: number; unpaidAmount: number; giftRatio: number; stockAlerts: number
+}
+export type DashUnpaid = {
+  registrationId: string; customerName: string; venueId: string; venueName: string
+  sessionDate: string; sessionTime: string; amount: number; waitedMinutes: number
+}
+export type DashAlert = { id: string; venueName: string; message: string; type: string; severity: string }
+export type DashInsight = { icon: string; color: string; bg: string; text: string }
+export type DashboardBundle = {
+  isAllVenues: boolean
+  venues: DashVenue[]
+  alerts: DashAlert[]
+  unpaidRegistrations: DashUnpaid[]
+  stats: {
+    totalRevenue: number; totalPlayers: number; totalSessions: number
+    totalUnpaid: number; totalUnpaidAmount: number
+    revenueDelta: { today: number; prev: number; deltaPercent: number }
+    fillRate: number; activeVenueCount: number
+  }
+  insights: DashInsight[]
+}
+
+type DaySessionRow = {
+  id: string; venueId: string; maxCapacity: number; courtFee: number; acFee: number; acEnabled: boolean
+  startTime: string; sessionDate: Date; status: string
+  registrations: { type: string; customer: { name: string }; payments: { amount: number; status: string }[] }[]
+}
+
+/** 某日各館營收（session 已收 Payment + product sale）；回 per-venue map */
+function revenueByVenue(sessions: DaySessionRow[], tx: { venueId: string; type: string; totalAmount: number | null }[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const s of sessions) {
+    const rev = s.registrations.reduce((sum, r) => sum + r.payments.filter(p => p.status === 'paid').reduce((a, p) => a + p.amount, 0), 0)
+    m.set(s.venueId, (m.get(s.venueId) ?? 0) + rev)
+  }
+  for (const t of tx) {
+    if (t.type === 'sale') m.set(t.venueId, (m.get(t.venueId) ?? 0) + (t.totalAmount ?? 0))
+  }
+  return m
+}
+
+export async function getDashboardForUserAsync(scope: UserScope, todayStr?: string): Promise<DashboardBundle> {
+  const isAll = scope.visibleVenueIds === 'all'
+  const venueIdFilter: string[] | undefined =
+    scope.visibleVenueIds === 'all'
+      ? undefined
+      : (scope.visibleVenueIds.length ? scope.visibleVenueIds : ['__none__'])
+  const today = todayStr ?? new Date().toISOString().split('T')[0]
+  const yesterday = new Date(new Date(today + 'T00:00:00.000Z').getTime() - 86400000).toISOString().split('T')[0]
+  const since7 = new Date(new Date(today + 'T00:00:00.000Z').getTime() - 7 * 86400000).toISOString().split('T')[0]
+
+  const venueWhere = venueIdFilter ? { id: { in: venueIdFilter } } : {}
+  const vWhere = venueIdFilter ? { venueId: { in: venueIdFilter } } : {}
+
+  const sessionInclude = {
+    registrations: {
+      where: { status: { not: 'cancelled' as const } },
+      include: { customer: { select: { name: true } }, payments: { select: { amount: true, status: true } } },
+    },
+  }
+
+  const [venues, todaySessions, ydaySessions, todayTx, ydayTx, alertRows, weekSessions] = await Promise.all([
+    prisma.venue.findMany({ where: venueWhere, orderBy: { id: 'asc' } }),
+    prisma.session.findMany({ where: { ...vWhere, sessionDate: new Date(today) }, include: sessionInclude }),
+    prisma.session.findMany({ where: { ...vWhere, sessionDate: new Date(yesterday) }, include: sessionInclude }),
+    prisma.productTransaction.findMany({ where: { ...vWhere, operatedAt: { gte: new Date(today + 'T00:00:00.000Z'), lt: new Date(new Date(today + 'T00:00:00.000Z').getTime() + 86400000) } }, select: { venueId: true, type: true, totalAmount: true } }),
+    prisma.productTransaction.findMany({ where: { ...vWhere, operatedAt: { gte: new Date(yesterday + 'T00:00:00.000Z'), lt: new Date(new Date(yesterday + 'T00:00:00.000Z').getTime() + 86400000) } }, select: { venueId: true, type: true, totalAmount: true } }),
+    prisma.anomalyAlert.findMany({ where: vWhere, orderBy: { createdAt: 'desc' } }),
+    prisma.session.findMany({ where: { ...vWhere, status: 'completed', sessionDate: { gte: new Date(since7), lte: new Date(today) } }, select: { venueId: true, maxCapacity: true, _count: { select: { registrations: { where: { status: { not: 'cancelled' } } } } } } }),
+  ])
+
+  const todayRevMap = revenueByVenue(todaySessions as DaySessionRow[], todayTx)
+  const ydayRevMap = revenueByVenue(ydaySessions as DaySessionRow[], ydayTx)
+
+  const nowMs = Date.now()
+  const unpaidList: DashUnpaid[] = []
+
+  const dashVenues: DashVenue[] = venues.map((v) => {
+    const vs = (todaySessions as DaySessionRow[]).filter((s) => s.venueId === v.id)
+    let players = 0, unpaidCount = 0, unpaidAmount = 0
+    for (const s of vs) {
+      const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+      for (const r of s.registrations) {
+        players++
+        const expected = r.type === 'season_player' ? 0 : fee
+        const paid = r.payments.some((p) => p.status === 'paid')
+        if (expected > 0 && !paid) {
+          unpaidCount++; unpaidAmount += expected
+          const startMs = new Date(`${ymd(s.sessionDate)}T${s.startTime}:00Z`).getTime()
+          unpaidList.push({
+            registrationId: `${s.id}-${unpaidList.length}`, customerName: r.customer.name,
+            venueId: v.id, venueName: v.name, sessionDate: ymd(s.sessionDate), sessionTime: s.startTime,
+            amount: expected, waitedMinutes: Math.max(0, Math.floor((nowMs - startMs) / 60000)),
+          })
+        }
+      }
+    }
+    const tx = todayTx.filter((t) => t.venueId === v.id)
+    const giftCount = tx.filter((t) => t.type === 'gift').length
+    const saleCount = tx.filter((t) => t.type === 'sale').length
+    const giftRatio = saleCount + giftCount > 0 ? Math.round((giftCount / (saleCount + giftCount)) * 100) : 0
+    return {
+      venueId: v.id, venueName: v.name,
+      totalRevenue: todayRevMap.get(v.id) ?? 0, totalPlayers: players, totalSessions: vs.length,
+      unpaidCount, unpaidAmount, giftRatio, stockAlerts: 0,
+    }
+  })
+
+  // 統計
+  const sum = (f: (d: DashVenue) => number) => dashVenues.reduce((a, d) => a + f(d), 0)
+  const todayTotalRev = [...todayRevMap.values()].reduce((a, b) => a + b, 0)
+  const prevTotalRev = [...ydayRevMap.values()].reduce((a, b) => a + b, 0)
+  const deltaPercent = prevTotalRev > 0 ? Math.round(((todayTotalRev - prevTotalRev) / prevTotalRev) * 1000) / 10 : 0
+  const fillCap = (todaySessions as DaySessionRow[]).reduce((a, s) => a + s.maxCapacity, 0)
+  const fillReg = (todaySessions as DaySessionRow[]).reduce((a, s) => a + s.registrations.length, 0)
+  const fillRate = fillCap > 0 ? Math.round((fillReg / fillCap) * 100) : 0
+
+  // AI insights（近 7 日各館 completed 滿場率 + alert 推導）
+  const weekByVenue = new Map<string, { cap: number; reg: number; count: number }>()
+  for (const s of weekSessions) {
+    const cur = weekByVenue.get(s.venueId) ?? { cap: 0, reg: 0, count: 0 }
+    cur.cap += s.maxCapacity; cur.reg += s._count.registrations; cur.count++
+    weekByVenue.set(s.venueId, cur)
+  }
+  const insights: DashInsight[] = []
+  const fillRates = venues.map((v) => {
+    const w = weekByVenue.get(v.id)
+    if (!w || w.count < 3) return null
+    return { name: v.name, rate: w.cap > 0 ? Math.round((w.reg / w.cap) * 100) : 0, count: w.count }
+  }).filter((x): x is { name: string; rate: number; count: number } => x !== null)
+  if (fillRates.length > 0) {
+    const top = fillRates.reduce((a, b) => (b.rate > a.rate ? b : a))
+    if (top.rate >= 75) insights.push({ icon: '📈', color: '#059669', bg: '#dcfce7', text: `${top.name}館本週滿場率達 ${top.rate}%（${top.count} 場），建議考慮調升熱門時段價格 5-10%。` })
+    const low = fillRates.reduce((a, b) => (b.rate < a.rate ? b : a))
+    if (low.rate < 55) insights.push({ icon: '📉', color: '#9a3412', bg: '#ffedd5', text: `${low.name}館本週滿場率僅 ${low.rate}%，建議調整冷門時段或加強推廣。` })
+  }
+  const giftAlert = alertRows.find((a) => a.type === 'gift_ratio')
+  if (giftAlert) insights.push({ icon: '🎁', color: '#9d174d', bg: '#fce7f3', text: giftAlert.message })
+  const dropAlert = alertRows.find((a) => a.type === 'revenue_drop')
+  if (dropAlert) insights.push({ icon: '⚠️', color: '#991b1b', bg: '#fee2e2', text: dropAlert.message })
+
+  return {
+    isAllVenues: isAll,
+    venues: dashVenues,
+    alerts: alertRows.map((a) => ({ id: a.id, venueName: '', message: a.message, type: a.type, severity: a.severity })).map((a, i) => ({ ...a, venueName: venues.find(v => v.id === alertRows[i].venueId)?.name ?? '' })),
+    unpaidRegistrations: unpaidList.sort((a, b) => b.waitedMinutes - a.waitedMinutes).slice(0, 8),
+    stats: {
+      totalRevenue: sum((d) => d.totalRevenue), totalPlayers: sum((d) => d.totalPlayers), totalSessions: sum((d) => d.totalSessions),
+      totalUnpaid: sum((d) => d.unpaidCount), totalUnpaidAmount: sum((d) => d.unpaidAmount),
+      revenueDelta: { today: todayTotalRev, prev: prevTotalRev, deltaPercent },
+      fillRate, activeVenueCount: isAll ? venues.filter((v) => v.isActive).length : venues.length,
+    },
+    insights,
+  }
+}
+
 // ── 批量展開預覽（Round 9C）───────────────────────────────────
 function fmtYMDLocal(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
