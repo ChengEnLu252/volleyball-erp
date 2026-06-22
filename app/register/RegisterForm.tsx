@@ -43,7 +43,7 @@ export default function RegisterForm({ venues }: { venues: Venue[] }) {
             {done ? '註冊已送出' : '申請註冊'}
           </div>
           <div className="vop-mono" style={{ fontSize: 10, color: COLORS.pink700, letterSpacing: '0.16em', marginTop: 4, fontWeight: 700 }}>
-            [ VolleyOps · 排球場館管理系統 ]
+            [ 多爾森健康有限公司 · ERP 系統 ]
           </div>
         </div>
 

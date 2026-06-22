@@ -293,13 +293,13 @@ export default function Sidebar() {
             <QiuQiu variant="face" size={26} />
             <div>
               <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: '-0.02em', color: COLORS.ink900 }}>
-                VolleyOps
+                多爾森健康
               </div>
               <div className="vop-mono" style={{
                 fontSize: 9, color: COLORS.pink700,
                 letterSpacing: '0.1em', marginTop: 1, fontWeight: 800,
               }}>
-                排球館管理系統
+                ERP 系統
               </div>
             </div>
           </div>
@@ -379,7 +379,7 @@ export default function Sidebar() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <QiuQiu variant="face" size={22} />
-          <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.ink900 }}>VolleyOps</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.ink900 }}>多爾森健康</div>
         </div>
         <button onClick={() => setOpen(!open)} style={{
           background: 'none', border: 'none', color: COLORS.ink900, fontSize: 22, cursor: 'pointer',
@@ -402,7 +402,7 @@ export default function Sidebar() {
               display: 'flex', alignItems: 'center', gap: 8,
             }}>
               <QiuQiu variant="face" size={24} />
-              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.ink900 }}>VolleyOps</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.ink900 }}>多爾森健康</div>
             </div>
             <NavContent />
           </div>

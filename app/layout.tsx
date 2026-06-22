@@ -3,7 +3,7 @@ import './globals.css'
 import ChromeShell from '@/components/ChromeShell'
 
 export const metadata: Metadata = {
-  title: 'VolleyOps',
+  title: '多爾森健康有限公司 ERP',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

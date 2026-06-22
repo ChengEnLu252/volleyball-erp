@@ -124,11 +124,11 @@ function LoginCard() {
           <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 4 }}>
             <QiuQiu variant="full" size={86} bob />
           </div>
-          <div style={{ fontSize: 26, fontWeight: 800, color: COLORS.ink900, letterSpacing: '-0.02em', marginTop: 4 }}>
-            VolleyOps
+          <div style={{ fontSize: 21, fontWeight: 800, color: COLORS.ink900, letterSpacing: '-0.01em', marginTop: 4 }}>
+            多爾森健康有限公司
           </div>
-          <div className="vop-mono" style={{ fontSize: 10, color: COLORS.pink700, letterSpacing: '0.18em', marginTop: 4, fontWeight: 700 }}>
-            [ 排球場館管理系統 ]
+          <div className="vop-mono" style={{ fontSize: 11, color: COLORS.pink700, letterSpacing: '0.18em', marginTop: 4, fontWeight: 700 }}>
+            [ ERP 系統 ]
           </div>
         </div>
 
