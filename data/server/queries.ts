@@ -370,6 +370,71 @@ export async function getSeasonRentalByTokenAsync(token: string): Promise<{ rent
   return { rental: mapSeasonRental(r), expired }
 }
 
+// ── 場次明細（Round 9B）───────────────────────────────────────
+export type SessionRegRow = {
+  id: string
+  type: 'season_player' | 'season_substitute' | 'walk_in'
+  status: 'registered' | 'waitlist' | 'cancelled' | 'attended'
+  paymentStatus: 'paid' | 'unpaid' | 'partial' | 'refunded'
+  paymentMethod: 'cash' | 'transfer' | 'online'
+  expectedAmount: number
+  customer: { name: string; phone: string | null; skillLevel: SkillLevel | null }
+}
+export type SessionDetailBundle = {
+  session: Session
+  registrations: SessionRegRow[]
+  pendingRefundCount: number
+}
+
+export async function getSessionDetailForUserAsync(
+  scope: UserScope,
+  id: string,
+): Promise<SessionDetailBundle | null> {
+  if (scope.role === 'none') return null
+  const s = await prisma.session.findUnique({
+    where: { id },
+    include: {
+      venue: { select: { name: true } },
+      registrations: {
+        where: { status: { not: 'cancelled' } },
+        include: {
+          customer: { select: { name: true, phone: true, skillLevel: true } },
+          payments: { select: { amount: true, method: true, status: true } },
+        },
+      },
+    },
+  })
+  if (!s) return null
+  if (scope.visibleVenueIds !== 'all' && !scope.visibleVenueIds.includes(s.venueId)) return null
+
+  const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+  let pendingRefundCount = 0
+  const registrations: SessionRegRow[] = s.registrations.map((r) => {
+    const paid = r.payments.find((p) => p.status === 'paid')
+    const isSeasonPlayer = r.type === 'season_player'
+    if (!isSeasonPlayer && paid) pendingRefundCount++
+    return {
+      id: r.id,
+      type: r.type as SessionRegRow['type'],
+      status: r.status as SessionRegRow['status'],
+      paymentStatus: paid ? 'paid' : 'unpaid',
+      paymentMethod: (paid?.method ?? 'cash') as SessionRegRow['paymentMethod'],
+      expectedAmount: isSeasonPlayer ? 0 : fee,
+      customer: {
+        name: r.customer.name,
+        phone: r.customer.phone,
+        skillLevel: fromSkill(r.customer.skillLevel),
+      },
+    }
+  })
+
+  return {
+    session: mapSession(s, { venueName: s.venue?.name, currentCount: s.registrations.length }),
+    registrations,
+    pendingRefundCount,
+  }
+}
+
 // ── 季租單對帳（Round 9A）─────────────────────────────────────
 // 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
 export type SeasonRentalReconRow = {
