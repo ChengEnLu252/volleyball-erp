@@ -370,6 +370,83 @@ export async function getSeasonRentalByTokenAsync(token: string): Promise<{ rent
   return { rental: mapSeasonRental(r), expired }
 }
 
+// ── 季租單對帳（Round 9A）─────────────────────────────────────
+// 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
+export type SeasonRentalReconRow = {
+  rentalId: string
+  captainId: string
+  captainName: string
+  captainPhone: string
+  venueId: string
+  venueName: string
+  timeslotLabel: string
+  seasonName: string
+  pricePerSession: number
+  totalAmount: number
+  paidAmount: number
+  gap: number
+  paidRatio: number
+  status: SeasonRentalStatus
+  generatedSessionCount: number
+  completedSessionCount: number
+  remainingSessionCount: number
+  isFullyPaid: boolean
+  isUnpaid: boolean
+  isCritical: boolean
+}
+
+export async function getSeasonRentalReconciliationForUserAsync(
+  scope: UserScope,
+  venueId?: string,
+): Promise<SeasonRentalReconRow[]> {
+  if (scope.role === 'none') return []
+  const timeslotWhere: any = {}
+  if (scope.visibleVenueIds !== 'all') {
+    timeslotWhere.venueId = { in: scope.visibleVenueIds.length ? scope.visibleVenueIds : ['__none__'] }
+  }
+  if (venueId) timeslotWhere.venueId = venueId
+
+  const rows = await prisma.seasonRental.findMany({
+    where: Object.keys(timeslotWhere).length ? { timeslot: timeslotWhere } : {},
+    include: {
+      captain: { select: { name: true, phone: true } },
+      season: { select: { name: true } },
+      timeslot: { select: { label: true, startTime: true, endTime: true, venueId: true, venue: { select: { name: true } } } },
+      sessions: { select: { status: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  })
+
+  return rows.map((r): SeasonRentalReconRow => {
+    const gap = r.totalAmount - r.paidAmount
+    const paidRatio = r.totalAmount > 0 ? r.paidAmount / r.totalAmount : 0
+    const generated = r.sessions.length
+    const completed = r.sessions.filter((s) => s.status === 'completed').length
+    return {
+      rentalId: r.id,
+      captainId: r.captainId,
+      captainName: r.captain?.name ?? '?',
+      captainPhone: r.captain?.phone ?? '',
+      venueId: r.timeslot?.venueId ?? '',
+      venueName: r.timeslot?.venue?.name ?? '?',
+      timeslotLabel: r.timeslot?.label ?? (r.timeslot ? `${r.timeslot.startTime}-${r.timeslot.endTime}` : '?'),
+      seasonName: r.season?.name ?? '?',
+      pricePerSession: r.pricePerSession,
+      totalAmount: r.totalAmount,
+      paidAmount: r.paidAmount,
+      gap,
+      paidRatio,
+      status: r.status as SeasonRentalStatus,
+      generatedSessionCount: generated,
+      completedSessionCount: completed,
+      remainingSessionCount: generated - completed,
+      isFullyPaid: gap <= 0,
+      isUnpaid: gap > 0,
+      isCritical: r.status === 'pending' && paidRatio < 1.0,
+    }
+  })
+}
+
 // ── 主揪 portal 完整資料包（Round 8A）─────────────────────────
 // 一次查好整個 rental 的場次 + 名單，client 端純渲染、本地切換場次。
 export type CaptainRegRow = {

@@ -3,7 +3,8 @@
 // 階段 21 M2：收款對帳（合併 場次 / 季租單 / 商品 / 無人場次 / 誠實商店）
 import { ReconTabs } from '@/components/reconciliation/ReconTabs'
 import SessionReconciliationPage from '@/app/reconciliation/sessions/page'
-import SeasonRentalReconciliationPage from '@/app/reconciliation/season-rentals/page'
+// 季租單分頁直接用 client 元件（store-mode）；標準路由 /reconciliation/season-rentals 才走 server 殼
+import SeasonRentalReconciliationPage from '@/app/reconciliation/season-rentals/SeasonRentalsClient'
 import ProductReconciliationPage from '@/app/reconciliation/products/page'
 import UnattendedReconciliationPage from '@/app/reconciliation/unattended/page'
 import HonestShopReconciliationPage from '@/app/reconciliation/honest-shop/page'
