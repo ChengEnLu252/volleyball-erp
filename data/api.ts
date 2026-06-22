@@ -18,6 +18,18 @@
 // 階段 1.4 規劃：
 //   - 把這裡 sync 函式都改成 async（一次性把所有頁面切到 await）
 //   - 但對 1.3 demo，sync 在 React 客戶端使用更簡單，先這樣。
+//
+// ⚠️ Phase 1（Round 1–10）後的真相 — 哪些已接 Supabase、哪些仍是 store：
+//   ✅ 已 DB 化（讀走 data/server/queries.ts；寫走 app/actions/*）：
+//      登入/權限(auth.ts+session override)、客戶頁、報名(公開)、主揪 portal、
+//      場次列表/明細/新增、取消場次/改費用、季租對帳、dashboard。
+//      → 這些「頁面」不再讀本檔的 sync listX()；本檔對應實體的 sync 函式
+//        對它們而言已是死路（只剩 Phase 2 store 頁在用）。
+//   🚧 仍跑 in-memory store（Phase 2 待遷）：商品/商城/訂單/財務/退費/薪資/
+//      對帳 hub/通知/目標/誠實商店/checkin 等。這些頁仍靠下面的 sync 函式 +
+//      data/store.ts 的記憶體 mutate + localStorage。**勿移除** sync 函式與
+//      store mutate，否則 Phase 2 頁會壞。
+//   結論：本檔 sync 區「保留不動」直到該實體的 Phase 2 頁也遷到 server。
 // ============================================================
 
 import { GENERATED } from './generator'
@@ -1760,8 +1772,7 @@ import {
   setCurrentUserId as storeSetCurrentUserId,
   // 階段 12：新增場次
   addSession as storeAddSession,
-  // 階段 14：登入狀態
-  getIsAuthenticated as storeGetIsAuthenticated,
+  // Round 5：登入狀態（仍由 syncSessionUser 設定）
   setIsAuthenticated as storeSetIsAuthenticated,
   // Round 5：Auth.js session 覆蓋層
   getSessionUserOverride, setSessionUserOverride,
@@ -2298,52 +2309,14 @@ export function getCurrentUser(): User | null {
   return null  // fail-closed：無 session 視為未登入
 }
 
-/** 切換登入身份（給 sidebar dropdown 用）*/
-export function switchCurrentUser(userId: string): void {
-  storeSetCurrentUserId(userId)
-}
-
-/** 列出所有 user — sidebar dropdown 用 */
+/** 列出所有 user — orders 等 Phase 2 頁仍用（下拉選操作者）*/
 export function listAllUsers(): User[] {
   return GENERATED.users
 }
 
-
-// ── 7.8 階段 14：真實登入體驗 ──────────────────────────────────
-// Demo 用「假登入」流程，但給示範者「真的有權限驗證」的感受：
-//   - login(userId, password)：驗密碼 → 設 currentUserId + isAuthenticated=true
-//   - logout()：isAuthenticated=false（保留 currentUserId 不重要）
-//   - isAuthenticated()：判斷要不要顯示 LoginCard
-//
-// 密碼放 permissions.ts 的 USER_PASSWORDS 常數；未來接真登入時，把整段
-// 換成呼叫後端 API。
-// ─────────────────────────────────────────────────────────────
-
-import { verifyUserPassword } from './permissions'
-
-/**
- * 嘗試登入。
- *
- * @returns true = 密碼正確，已切到該 user 並標記為已登入；
- *          false = 密碼錯誤，狀態不變。
- */
-export function login(userId: string, password: string): boolean {
-  // 動態 require 避免循環 import 問題（permissions.ts 已在檔內 import）
-  if (!verifyUserPassword(userId, password)) return false
-  storeSetCurrentUserId(userId)
-  storeSetIsAuthenticated(true)
-  return true
-}
-
-/** 登出 — 標記為未登入，回到 LoginCard */
-export function logout(): void {
-  storeSetIsAuthenticated(false)
-}
-
-/** 是否已通過登入驗證 — ChromeShell 用此判斷要不要擋下 LoginCard */
-export function isAuthenticated(): boolean {
-  return storeGetIsAuthenticated()
-}
+// 註：舊「假登入」(login/logout/isAuthenticated) 與「切視角」(switchCurrentUser/
+// impersonation) 已於 Round 5 切到 Auth.js session 後退役並移除。真登入見 auth.ts；
+// 目前使用者一律由 data/store 的 SessionUserOverride 提供（見 getCurrent* 系列）。
 
 
 // ============================================================
@@ -2362,7 +2335,7 @@ export function isAuthenticated(): boolean {
 // ============================================================
 
 import {
-  PAGE_ACCESS_MATRIX, REAL_USER_ID, USER_VENUE_ROLES_SEED,
+  PAGE_ACCESS_MATRIX, USER_VENUE_ROLES_SEED,
   composeRoleLabel, deriveEffectiveRole, lookupPageAccess,
   type EffectiveRole, type PageAccess, type PageKey,
 } from './permissions'
@@ -2484,32 +2457,8 @@ export function isVenueVisible(venueId: string, visible: string[] | 'all'): bool
 }
 
 
-// ── 8.4 Impersonation（owner 切視角） ─────────────────────────
-
-/**
- * 是否在「切視角」模式 — currentUserId !== REAL_USER_ID。
- *
- * Demo 環境固定 REAL_USER_ID='u1'（王家凱 owner）。
- * 未來接真登入時，把 permissions.ts 的 REAL_USER_ID 改成讀 session。
- */
-export function isImpersonating(): boolean {
-  return getCurrentUserId() !== REAL_USER_ID
-}
-
-/** 真實登入帳號（demo 永遠 u1） */
-export function getRealUserId(): string {
-  return REAL_USER_ID
-}
-
-/** 真實登入 user 物件 */
-export function getRealUser(): User | null {
-  return GENERATED.users.find(u => u.id === REAL_USER_ID) ?? null
-}
-
-/** 一鍵回到 owner 視角 */
-export function returnToRealUser(): void {
-  storeSetCurrentUserId(REAL_USER_ID)
-}
+// ── 8.4 Impersonation（owner 切視角）已於 Round 5 退役 ─────────
+// 真登入後身分固定為 session 使用者；不再用 mutate currentUserId 切視角。
 
 
 // ── 8.5 Role label（Sidebar 顯示用） ──────────────────────────
