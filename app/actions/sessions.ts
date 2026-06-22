@@ -12,10 +12,14 @@
 import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import { getSessionUser } from '@/data/server/auth-helpers'
-import { resolveUserScope, type UserScope } from '@/data/server/queries'
-import type { ConflictResult } from '@/types'
+import { resolveUserScope, getBatchExpansionPreviewAsync, type UserScope, type BatchPreview } from '@/data/server/queries'
+import type { ConflictResult, NetHeight, SessionType, SkillLevel } from '@/types'
 
 type Err = { ok: false; reason: string }
+
+// app SkillLevel(B+/A+/S*) → Prisma enum 名稱
+const SKILL_TO_PRISMA: Record<string, string> = { 'B+': 'B_PLUS', 'A+': 'A_PLUS', 'S*': 'S_STAR' }
+const toPrismaSkill = (s?: string | null): string | null => (s ? (SKILL_TO_PRISMA[s] ?? s) : null)
 
 /** 解析登入者 scope，要求 owner/manager */
 async function requireManagerScope(): Promise<UserScope | null> {
@@ -89,4 +93,98 @@ export async function patchSessionFeesAction(args: {
   })
   revalidatePath(`/sessions/${args.sessionId}`)
   return { ok: true }
+}
+
+// ── 9C：新增場次 ─────────────────────────────────────────────
+
+/** 批量預覽（client 在選範本/週數時呼叫）*/
+export async function previewBatchExpansionAction(args: {
+  timeslotId: string; fromDate: string; weeks: number
+}): Promise<BatchPreview> {
+  const scope = await requireManagerScope()
+  if (!scope) return { ok: false, reason: '需館長以上權限' }
+  return getBatchExpansionPreviewAsync(scope, args)
+}
+
+/** 範本批量展開建立場次 */
+export async function expandTimeslotToSessionsAction(args: {
+  timeslotId: string; fromDate: string; weeks: number; notes?: string | null
+}): Promise<{ ok: true; createdSessionIds: string[]; skippedDates: string[] } | Err> {
+  const scope = await requireManagerScope()
+  if (!scope) return { ok: false, reason: '需館長以上權限' }
+
+  const ts = await prisma.timeslot.findUnique({ where: { id: args.timeslotId } })
+  if (!ts) return { ok: false, reason: '找不到此時段範本' }
+  if (!venueAllowed(scope, ts.venueId)) return { ok: false, reason: '無權限操作他館範本' }
+
+  const preview = await getBatchExpansionPreviewAsync(scope, { timeslotId: args.timeslotId, fromDate: args.fromDate, weeks: args.weeks })
+  if (!preview.ok) return preview
+
+  const toCreate = preview.dates.filter((d) => !d.skip)
+  const skippedDates = preview.dates.filter((d) => d.skip).map((d) => d.date)
+  const createdSessionIds = toCreate.map((d) => `s-${ts.id}-${d.date}`)
+
+  if (toCreate.length > 0) {
+    await prisma.session.createMany({
+      data: toCreate.map((d) => ({
+        id: `s-${ts.id}-${d.date}`,
+        venueId: ts.venueId, timeslotId: ts.id, seasonRentalId: null, createdBy: scope.userId,
+        sessionDate: new Date(d.date), startTime: ts.startTime, endTime: ts.endTime, court: ts.court,
+        netHeight: ts.defaultNetHeight, sessionType: ts.defaultSessionType,
+        courtFee: ts.defaultCourtFee, acFee: 0, acEnabled: false, maxCapacity: ts.defaultMaxCapacity,
+        minSkillRequired: ts.defaultMinSkillRequired, maxSkillAllowed: ts.defaultMaxSkillAllowed,
+        status: 'open', isUnattended: false, notes: args.notes ?? null,
+      })),
+      skipDuplicates: true,
+    })
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      userId: scope.userId, action: 'CREATE_SESSION', entityType: 'Timeslot', entityId: ts.id,
+      newValues: { source: 'batch', timeslotId: ts.id, weeks: args.weeks, createdSessionIds, skippedDates },
+    },
+  })
+  revalidatePath('/sessions')
+  return { ok: true, createdSessionIds, skippedDates }
+}
+
+/** 單場手動建立 */
+export async function createCustomSessionAction(args: {
+  venueId: string; timeslotId?: string | null
+  sessionDate: string; startTime: string; endTime: string; court?: string | null
+  netHeight: NetHeight; sessionType: SessionType
+  courtFee: number; acFee?: number; acEnabled?: boolean; maxCapacity: number
+  minSkillRequired?: SkillLevel | null; maxSkillAllowed?: SkillLevel | null; notes?: string | null
+}): Promise<{ ok: true; sessionId: string } | Err> {
+  const scope = await requireManagerScope()
+  if (!scope) return { ok: false, reason: '需館長以上權限' }
+  if (!venueAllowed(scope, args.venueId)) return { ok: false, reason: '無權限替他館建立場次' }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(args.sessionDate)) return { ok: false, reason: '日期格式錯誤' }
+  if (!/^\d{2}:\d{2}$/.test(args.startTime) || !/^\d{2}:\d{2}$/.test(args.endTime)) return { ok: false, reason: '時間格式錯誤' }
+  if (args.startTime >= args.endTime) return { ok: false, reason: '結束時間需晚於開始時間' }
+  if (args.courtFee < 0) return { ok: false, reason: '球費不可為負' }
+  if (args.maxCapacity <= 0) return { ok: false, reason: '容量上限需 > 0' }
+
+  const venue = await prisma.venue.findUnique({ where: { id: args.venueId } })
+  if (!venue) return { ok: false, reason: '找不到此球館' }
+
+  const id = `s-custom-${Date.now().toString(36)}-${Math.floor(Math.random() * 0xffff).toString(16)}`
+  await prisma.session.create({
+    data: {
+      id, venueId: args.venueId, timeslotId: args.timeslotId || null, seasonRentalId: null, createdBy: scope.userId,
+      sessionDate: new Date(args.sessionDate), startTime: args.startTime, endTime: args.endTime, court: args.court?.trim() || null,
+      netHeight: args.netHeight as never, sessionType: args.sessionType as never,
+      courtFee: Math.round(args.courtFee), acFee: Math.round(args.acFee ?? 0), acEnabled: (args.acFee ?? 0) > 0 ? !!args.acEnabled : false,
+      maxCapacity: args.maxCapacity,
+      minSkillRequired: toPrismaSkill(args.minSkillRequired) as never, maxSkillAllowed: toPrismaSkill(args.maxSkillAllowed) as never,
+      status: 'open', isUnattended: false, notes: args.notes?.trim() || null,
+    },
+  })
+  await prisma.auditLog.create({
+    data: { userId: scope.userId, action: 'CREATE_SESSION', entityType: 'Session', entityId: id, newValues: { source: 'manual', venueId: args.venueId, sessionDate: args.sessionDate } },
+  })
+  revalidatePath('/sessions')
+  return { ok: true, sessionId: id }
 }

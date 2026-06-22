@@ -370,6 +370,72 @@ export async function getSeasonRentalByTokenAsync(token: string): Promise<{ rent
   return { rental: mapSeasonRental(r), expired }
 }
 
+// ── 批量展開預覽（Round 9C）───────────────────────────────────
+function fmtYMDLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+export type BatchPreview =
+  | { ok: false; reason: string }
+  | {
+      ok: true
+      timeslot: { id: string; dayOfWeek: number; startTime: string; endTime: string; label: string | null }
+      venueName: string
+      dates: Array<{ date: string; skip: boolean; reason: string | null }>
+      totalNew: number
+      totalSkipped: number
+    }
+
+export async function getBatchExpansionPreviewAsync(
+  scope: UserScope,
+  args: { timeslotId: string; fromDate: string; weeks: number },
+): Promise<BatchPreview> {
+  if (scope.role === 'none') return { ok: false, reason: '無權限' }
+  if (args.weeks <= 0 || args.weeks > 26) return { ok: false, reason: '週數需介於 1~26' }
+  const ts = await prisma.timeslot.findUnique({
+    where: { id: args.timeslotId },
+    include: { venue: { select: { name: true } } },
+  })
+  if (!ts) return { ok: false, reason: '找不到此時段範本' }
+  if (scope.visibleVenueIds !== 'all' && !scope.visibleVenueIds.includes(ts.venueId)) {
+    return { ok: false, reason: '無權限操作他館範本' }
+  }
+
+  const start = new Date(args.fromDate + 'T00:00:00')
+  const offset = (ts.dayOfWeek - start.getDay() + 7) % 7
+  start.setDate(start.getDate() + offset)
+  const dateStrs: string[] = []
+  for (let i = 0; i < args.weeks; i++) {
+    const d = new Date(start)
+    d.setDate(start.getDate() + i * 7)
+    dateStrs.push(fmtYMDLocal(d))
+  }
+
+  const existing = await prisma.session.findMany({
+    where: { timeslotId: ts.id, sessionDate: { in: dateStrs.map((s) => new Date(s)) } },
+    select: { sessionDate: true, status: true },
+  })
+  const existMap = new Map(existing.map((e) => [ymd(e.sessionDate), e.status]))
+
+  const dates = dateStrs.map((date) => {
+    const st = existMap.get(date)
+    if (st) {
+      return { date, skip: true, reason: st === 'cancelled' ? '此日已有相同範本場次（已取消，保留紀錄）' : '此日已有相同範本場次' }
+    }
+    return { date, skip: false, reason: null as string | null }
+  })
+  const totalSkipped = dates.filter((d) => d.skip).length
+  return {
+    ok: true,
+    timeslot: { id: ts.id, dayOfWeek: ts.dayOfWeek, startTime: ts.startTime, endTime: ts.endTime, label: ts.label },
+    venueName: ts.venue?.name ?? '未知球館',
+    dates,
+    totalNew: dates.length - totalSkipped,
+    totalSkipped,
+  }
+}
+
 // ── 場次明細（Round 9B）───────────────────────────────────────
 export type SessionRegRow = {
   id: string
