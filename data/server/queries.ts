@@ -661,6 +661,70 @@ export async function getSessionDetailForUserAsync(
   }
 }
 
+// ── 前台報到 / 收款（P2.1b）────────────────────────────────────
+export type CheckinSession = {
+  session: Session
+  registrations: SessionRegRow[]
+}
+export type CheckinBundle = {
+  date: string        // 實際顯示的日期（今天無場次時回退到最近一個有場次的日子）
+  isToday: boolean
+  sessions: CheckinSession[]
+}
+
+/** 當日（或最近一個有場次的日子）該使用者可見館的場次 + 名單，供前台報到/收款 */
+export async function getCheckinDataForUserAsync(scope: UserScope, todayStr?: string): Promise<CheckinBundle> {
+  if (scope.role === 'none') return { date: todayStr ?? new Date().toISOString().split('T')[0], isToday: true, sessions: [] }
+  const today = todayStr ?? new Date().toISOString().split('T')[0]
+  const baseWhere = { ...venueWhere(scope.visibleVenueIds), status: { not: 'cancelled' } as any }
+
+  // 優先今天；今天沒場次 → 回退到 <= today 最近一個有場次的日期（避免測試時空畫面）
+  let target = today
+  let count = await prisma.session.count({ where: { ...baseWhere, sessionDate: new Date(today) } })
+  if (count === 0) {
+    const latest = await prisma.session.findFirst({
+      where: { ...baseWhere, sessionDate: { lte: new Date(today) } },
+      orderBy: { sessionDate: 'desc' }, select: { sessionDate: true },
+    })
+    if (latest) target = latest.sessionDate.toISOString().split('T')[0]
+  }
+
+  const rows = await prisma.session.findMany({
+    where: { ...baseWhere, sessionDate: new Date(target) },
+    include: {
+      venue: { select: { name: true } },
+      registrations: {
+        where: { status: { not: 'cancelled' } },
+        include: {
+          customer: { select: { name: true, phone: true, skillLevel: true } },
+          payments: { select: { amount: true, method: true, status: true } },
+        },
+      },
+    },
+    orderBy: [{ startTime: 'asc' }],
+  })
+
+  const sessions: CheckinSession[] = rows.map((s) => {
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const registrations: SessionRegRow[] = s.registrations.map((r) => {
+      const paid = r.payments.find((p) => p.status === 'paid')
+      const isSeasonPlayer = r.type === 'season_player'
+      return {
+        id: r.id,
+        type: r.type as SessionRegRow['type'],
+        status: r.status as SessionRegRow['status'],
+        paymentStatus: paid ? 'paid' : 'unpaid',
+        paymentMethod: (paid?.method ?? 'cash') as SessionRegRow['paymentMethod'],
+        expectedAmount: isSeasonPlayer ? 0 : fee,
+        customer: { name: r.customer.name, phone: r.customer.phone, skillLevel: fromSkill(r.customer.skillLevel) },
+      }
+    })
+    return { session: mapSession(s, { venueName: s.venue?.name, currentCount: s.registrations.length }), registrations }
+  })
+
+  return { date: target, isToday: target === today, sessions }
+}
+
 // ── 季租單對帳（Round 9A）─────────────────────────────────────
 // 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
 export type SeasonRentalReconRow = {

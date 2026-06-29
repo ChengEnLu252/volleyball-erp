@@ -10,6 +10,12 @@
 - **優先順序**：財務 / 對帳 / 薪資 **先做**（直擊館主核心痛點「看不到錢的真實流向」）。
 - **金流 / 電子發票**：這階段**先不接**，維持現場付款（現金/轉帳/LINE Pay）的「記錄」。日後再評估。
 - **外接整合（本階段納入）**：真 LINE 登入、真 AI 摘要、Excel 匯入歷史帳、通知管道（LINE/Email）。
+- 🔒 **冷氣費算法（依對方實務敲定）**：分兩層——
+  (1) **向玩家加收**的冷氣費＝現有 per-session `acFee`（收款這層不變）；
+  (2) **電表成本**＝「**度數 × 8 元/度**」（play one；各館單價待確認），用來與實收對「**盤損**」。
+  → (2) 在 **P2.2 對帳** 實作：`Session` 加冷氣度數欄、各館加電費單價；不影響 P2.1 收款。
+- 🔒 **冷門時段各館自訂**（play one：9-19、22-01）→ `Timeslot` 加冷/熱門旗標，餵館長獎金（P2.3）。
+- 參考：對方真實記帳 Excel 結構與對應見 `client-data/欄位對應表.md`（gitignored）。
 
 ---
 
@@ -35,8 +41,10 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   與 `undoPaymentAction`（誤收時刪 paid Payment + `UPDATE_PAYMENT`；擋已退費）。
   `app/sessions/[id]/SessionDetailClient.tsx` 名單加「收款」欄（付款方式下拉＋收款鈕／取消收款鈕）。
   讀取側 `getSessionDetailForUserAsync` 既有 paymentStatus/expectedAmount，無需改。build 綠＋唯讀探針驗過。
-- ⏳ **P2.1b checkin 報到頁收款**：`app/checkin/page.tsx` 目前 `markPaid()` 只改本地 state，
-  改接 `collectPaymentAction`；此頁需先做 server 殼（依 venue scope 查當日場次＋名單）。
+- ✅ **P2.1b checkin 報到頁收款（已完成）**：`app/checkin/page.tsx` 改 server 殼（`getCheckinDataForUserAsync`
+  查當日／最近有場次的日子、依 venue scope）；`CheckinClient.tsx`（新）報到走 `setAttendanceAction`
+  （`app/actions/checkin.ts`，attendance 不寫 audit）、收款走 `collectPaymentAction`、取消收款 `undoPaymentAction`。
+  原 `markPaid()`/`toggleCheckin()` 純本地 state 退役。當日多場可切換。build 綠。
 - ⏳ **P2.1c 自助回報確認入帳**：`app/self-checkin/[sessionId]` 客戶「我已付款」走 server action
   寫 Registration.selfReported*（**不建 Payment**）；後台一鍵「確認入帳」→ `collectPaymentAction`。
 - ⏳ **P2.1d 退費鏈**：`finance/refunds` 讀取殼 + 退費/放棄退費 server action。

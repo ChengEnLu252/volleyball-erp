@@ -37,3 +37,5 @@ yarn-error.log*
 # os / editor
 *.swp
 Thumbs.db
+# 對方提供的真實帳務/個資（不進版控）
+client-data/
