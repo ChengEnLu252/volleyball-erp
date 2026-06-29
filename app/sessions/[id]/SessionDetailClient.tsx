@@ -8,8 +8,9 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { isConflictResult } from '@/data/api'
 import { cancelSessionAction, patchSessionFeesAction } from '@/app/actions/sessions'
+import { collectPaymentAction, undoPaymentAction } from '@/app/actions/payments'
 import { REGISTRATION_TYPE_LABEL } from '@/types'
-import type { ConflictResult } from '@/types'
+import type { ConflictResult, PaymentMethod } from '@/types'
 import type { EffectiveRole } from '@/data/permissions'
 import type { SessionDetailBundle } from '@/data/server/queries'
 import ConflictBanner from '@/components/ConflictBanner'
@@ -63,6 +64,28 @@ export default function SessionDetailClient({
 
   const canEditFees = role === 'owner' || role === 'manager'
   const canCancel = !!session && (session.status === 'open' || session.status === 'full')
+
+  // 收款（P2.1）：任何已登入 ERP 人員可收款；server 端另強制 venue scope
+  const canCollect = role !== 'none' && !!session && session.status !== 'cancelled'
+  const [payBusyId, setPayBusyId] = useState<string | null>(null)
+  const [methodById, setMethodById] = useState<Record<string, PaymentMethod>>({})
+
+  const handleCollect = async (regId: string) => {
+    const method = methodById[regId] ?? 'cash'
+    setPayBusyId(regId)
+    const res = await collectPaymentAction({ registrationId: regId, method })
+    setPayBusyId(null)
+    if (!res.ok) { alert(`⚠️ ${res.reason}`); return }
+    router.refresh()
+  }
+  const handleUndoPayment = async (regId: string) => {
+    if (!confirm('確定取消這筆收款嗎？（僅誤收時使用，會刪除已付款紀錄）')) return
+    setPayBusyId(regId)
+    const res = await undoPaymentAction({ registrationId: regId })
+    setPayBusyId(null)
+    if (!res.ok) { alert(`⚠️ ${res.reason}`); return }
+    router.refresh()
+  }
 
   const derived = useMemo(() => {
     const paidCount = registrations.filter(r => r.type === 'season_player' || r.paymentStatus === 'paid').length
@@ -210,11 +233,11 @@ export default function SessionDetailClient({
 
       <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0', overflow: 'hidden' }}>
         <div style={{ padding: '13px 20px', borderBottom: '1px solid #f0ede6', fontSize: 13, fontWeight: 600 }}>報名名單（{registrations.length} 人）</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 70px 70px 80px 80px 100px 90px', padding: '8px 20px', background: '#fafaf8', fontSize: 11, color: '#aaa', fontWeight: 500, gap: 12 }}>
-          <div>#</div><div>姓名</div><div>程度</div><div>類型</div><div>報到</div><div>付款方式</div><div>付款狀態</div><div style={{ textAlign: 'right' }}>金額</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 70px 70px 80px 80px 100px 90px 150px', padding: '8px 20px', background: '#fafaf8', fontSize: 11, color: '#aaa', fontWeight: 500, gap: 12 }}>
+          <div>#</div><div>姓名</div><div>程度</div><div>類型</div><div>報到</div><div>付款方式</div><div>付款狀態</div><div style={{ textAlign: 'right' }}>金額</div><div style={{ textAlign: 'center' }}>收款</div>
         </div>
         {registrations.map((reg, i) => (
-          <div key={reg.id} style={{ display: 'grid', gridTemplateColumns: '32px 1fr 70px 70px 80px 80px 100px 90px', padding: '12px 20px', borderTop: '1px solid #f5f4f0', alignItems: 'center', gap: 12, background: reg.type !== 'season_player' && reg.paymentStatus === 'unpaid' ? '#fffbfb' : '#fff' }}>
+          <div key={reg.id} style={{ display: 'grid', gridTemplateColumns: '32px 1fr 70px 70px 80px 80px 100px 90px 150px', padding: '12px 20px', borderTop: '1px solid #f5f4f0', alignItems: 'center', gap: 12, background: reg.type !== 'season_player' && reg.paymentStatus === 'unpaid' ? '#fffbfb' : '#fff' }}>
             <div style={{ fontSize: 13, color: '#aaa' }}>{i + 1}</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 30, height: 30, borderRadius: 8, background: '#e8e6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 600, color: '#5b4fd8', flexShrink: 0 }}>{reg.customer.name[0]}</div>
@@ -238,7 +261,7 @@ export default function SessionDetailClient({
                 {reg.status === 'attended' ? '✓ 已報到' : '未報到'}
               </span>
             </div>
-            <div style={{ fontSize: 12, color: '#555' }}>{reg.type === 'season_player' ? '—' : METHOD_LABEL[reg.paymentMethod]}</div>
+            <div style={{ fontSize: 12, color: '#555' }}>{reg.type === 'season_player' ? '—' : reg.paymentStatus === 'paid' ? METHOD_LABEL[reg.paymentMethod] : '—'}</div>
             <div>
               {reg.type === 'season_player' ? (
                 <span style={{ fontSize: 11, color: '#aaa' }}>季打免費</span>
@@ -250,6 +273,31 @@ export default function SessionDetailClient({
             </div>
             <div style={{ fontSize: 13, fontWeight: 600, textAlign: 'right', color: reg.type !== 'season_player' && reg.paymentStatus === 'unpaid' ? '#e85d3a' : '#1a1917' }}>
               {reg.type === 'season_player' ? '$0' : `$${reg.expectedAmount}`}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'center' }}>
+              {reg.type === 'season_player' ? (
+                <span style={{ fontSize: 11, color: '#ccc' }}>免費</span>
+              ) : reg.paymentStatus === 'paid' ? (
+                canCollect ? (
+                  <button type="button" disabled={payBusyId === reg.id} onClick={() => handleUndoPayment(reg.id)}
+                    style={{ fontSize: 11, padding: '4px 10px', borderRadius: 7, border: '1px solid #e0ddd4', background: '#fff', color: '#991b1b', cursor: payBusyId === reg.id ? 'default' : 'pointer', opacity: payBusyId === reg.id ? 0.5 : 1 }}>
+                    {payBusyId === reg.id ? '…' : '取消收款'}
+                  </button>
+                ) : <span style={{ fontSize: 11, color: '#ccc' }}>—</span>
+              ) : canCollect ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <select value={methodById[reg.id] ?? 'cash'} onChange={e => setMethodById(m => ({ ...m, [reg.id]: e.target.value as PaymentMethod }))}
+                    style={{ fontSize: 11, padding: '4px 2px', borderRadius: 6, border: '1px solid #e0ddd4', background: '#fff', cursor: 'pointer' }}>
+                    <option value="cash">現金</option>
+                    <option value="transfer">轉帳</option>
+                    <option value="online">線上</option>
+                  </select>
+                  <button type="button" disabled={payBusyId === reg.id} onClick={() => handleCollect(reg.id)}
+                    style={{ fontSize: 11, padding: '4px 12px', borderRadius: 7, border: 'none', background: '#1a1917', color: '#d4a843', fontWeight: 600, cursor: payBusyId === reg.id ? 'default' : 'pointer', opacity: payBusyId === reg.id ? 0.5 : 1 }}>
+                    {payBusyId === reg.id ? '…' : '收款'}
+                  </button>
+                </div>
+              ) : <span style={{ fontSize: 11, color: '#ccc' }}>—</span>}
             </div>
           </div>
         ))}
