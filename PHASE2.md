@@ -53,8 +53,16 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   - 後台「確認入帳」：`SessionRegRow` 加 `selfReportedPaid`/`selfPaymentMethod`，場次明細未付款列顯示
     「🙋 已自助回報」、按鈕變「確認入帳」並預帶客戶回報的付款方式 → 走既有 `collectPaymentAction` 建真 Payment。
   - build 綠 + 唯讀探針（無人場次 `s-ts90` @ Hibi）。
-- ⏳ **P2.1d 退費鏈**：`finance/refunds` 讀取殼 + 退費/放棄退費 server action。
-  ⚠️ 前置：Prisma `Registration` **缺 `refundDecision` 欄位**、`AuditAction` enum **缺 `ISSUE_REFUND`/`WAIVE_REFUND`** → 需 migration。
+- ✅ **P2.1d 退費鏈（已完成）**：
+  - migration `20260629120000_refund_chain`：`Registration.refundDecision`（RefundDecision enum nullable）+
+    `AuditAction` 加 `ISSUE_REFUND`/`WAIVE_REFUND`（已套用 Supabase）。
+  - `app/actions/refunds.ts`（新）：`issueRefundAction`（開負額 Payment status=refunded + refundDecision='refunded'
+    + ISSUE_REFUND audit；owner/manager + venue scope + 樂觀鎖 + 金額 0<x≤netPaid）、
+    `waiveRefundAction`（只標 refundDecision='waived' + WAIVE_REFUND audit，不建 Payment）。
+  - `queries.ts`：`getPendingRefundsForUserAsync`（已取消場次 + refundDecision=null + netPaid>0；取消時間/原因由
+    CANCEL_SESSION audit 推導）、`getRefundHistoryForUserAsync`（退費後設資料由負額 Payment + audit 推導，不另存欄位）。
+  - `finance/refunds` 改 server 殼 + `RefundsClient`（新，待退費/歷史兩分頁，前端篩選，樂觀鎖+ConflictBanner）。
+  - build 綠。測試：先收款→取消場次→退費頁出現待退費（seed 目前無已取消場次）。
 - ⏳ **P2.1e 場次收款對帳**：`reconciliation/sessions` 讀取殼（每場應收/實收/差額由 DB 計）。
 
 ### P2.2 對帳系統 hub

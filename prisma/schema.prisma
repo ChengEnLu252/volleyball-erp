@@ -367,6 +367,11 @@ model Registration {
   selfPaymentEvidence String?             @map("self_payment_evidence")
   selfReportedAt      DateTime?           @map("self_reported_at")
 
+  // ── 退費決策（P2.1d；場次取消後對已付款報名）──────────────
+  /// null=未決定（出現在待退費清單）；refunded=已開負額 Payment；waived=放棄退費
+  /// 退費後設資料（金額/方式/原因/誰/何時）由負額 Payment + AuditLog 推導，不另存欄位
+  refundDecision      RefundDecision?     @map("refund_decision")
+
   // 關聯
   session  Session   @relation(fields: [sessionId], references: [id])
   customer Customer  @relation(fields: [customerId], references: [id])
@@ -404,6 +409,12 @@ enum RegistrationSource {
   staff
   captain
   self
+}
+
+/// 退費決策（P2.1d）
+enum RefundDecision {
+  refunded
+  waived
 }
 
 
@@ -552,6 +563,9 @@ enum AuditAction {
   CREATE_SEASON_RENTAL
   UPDATE_SEASON_RENTAL
   CANCEL_SEASON_RENTAL
+  // P2.1d 新增：退費鏈
+  ISSUE_REFUND
+  WAIVE_REFUND
 }
 
 

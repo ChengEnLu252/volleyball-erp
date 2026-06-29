@@ -798,6 +798,169 @@ export async function getSelfCheckinDataAsync(sessionId: string): Promise<SelfCh
   }
 }
 
+// ── 退費鏈（P2.1d）─────────────────────────────────────────────
+// 形狀對齊 data/api.ts 的 PendingRefundRow / RefundHistoryRow。
+// 退費後設資料（金額/方式/原因/誰/何時）由「負額 Payment + AuditLog」推導，不另存欄位。
+type RefundMethod = 'cash' | 'transfer' | 'online'
+export type PendingRefundRow = {
+  registrationId: string
+  registrationUpdatedAt: string
+  sessionId: string
+  sessionDate: string
+  sessionStartTime: string
+  venueId: string
+  venueName: string
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+  registrationType: 'season_player' | 'season_substitute' | 'walk_in'
+  netPaid: number
+  lastPaymentMethod: RefundMethod | null
+  sessionCancelledAt: string | null
+  sessionCancelDetail: string | null
+}
+export type RefundHistoryRow = {
+  registrationId: string
+  decision: 'refunded' | 'waived'
+  decidedAt: string | null
+  decidedBy: string | null
+  refundedAmount: number | null
+  refundMethod: RefundMethod | null
+  refundNotes: string | null
+  waiveReason: string | null
+  sessionId: string
+  sessionDate: string
+  sessionStartTime: string
+  venueId: string
+  venueName: string
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+}
+export type RefundHistoryFilter = { decision?: 'refunded' | 'waived' | 'all'; venueId?: string | 'all' }
+
+/** 待退費：已取消場次中、尚未決定退費（refundDecision=null）且 netPaid>0 的報名 */
+export async function getPendingRefundsForUserAsync(scope: UserScope): Promise<PendingRefundRow[]> {
+  if (scope.role === 'none') return []
+  const sessions = await prisma.session.findMany({
+    where: { status: 'cancelled', ...venueWhere(scope.visibleVenueIds) },
+    include: {
+      venue: { select: { name: true } },
+      registrations: {
+        where: { refundDecision: null },
+        include: {
+          customer: { select: { name: true, phone: true } },
+          payments: { select: { amount: true, method: true, paidAt: true } },
+        },
+      },
+    },
+  })
+  const sessionIds = sessions.map((s) => s.id)
+  const cancelLogs = sessionIds.length
+    ? await prisma.auditLog.findMany({
+        where: { action: 'CANCEL_SESSION', entityType: 'Session', entityId: { in: sessionIds } },
+        orderBy: { createdAt: 'desc' },
+        select: { entityId: true, createdAt: true, newValues: true },
+      })
+    : []
+  const cancelBySession = new Map<string, { at: string; detail: string | null }>()
+  for (const log of cancelLogs) {
+    if (log.entityId && !cancelBySession.has(log.entityId)) {
+      const nv = (log.newValues ?? {}) as { reason?: string }
+      cancelBySession.set(log.entityId, { at: log.createdAt.toISOString(), detail: nv.reason ?? null })
+    }
+  }
+  const rows: PendingRefundRow[] = []
+  for (const s of sessions) {
+    const cancel = cancelBySession.get(s.id)
+    for (const r of s.registrations) {
+      const netPaid = r.payments.reduce((sum, p) => sum + p.amount, 0)
+      if (netPaid <= 0) continue
+      const positives = r.payments.filter((p) => p.amount > 0).sort((a, b) => a.paidAt.getTime() - b.paidAt.getTime())
+      rows.push({
+        registrationId: r.id,
+        registrationUpdatedAt: r.updatedAt.toISOString(),
+        sessionId: s.id,
+        sessionDate: s.sessionDate.toISOString().split('T')[0],
+        sessionStartTime: s.startTime,
+        venueId: s.venueId,
+        venueName: s.venue?.name ?? '?',
+        customerId: r.customerId,
+        customerName: r.customer.name,
+        customerPhone: r.customer.phone,
+        registrationType: r.type as PendingRefundRow['registrationType'],
+        netPaid,
+        lastPaymentMethod: positives.length ? (positives[positives.length - 1].method as RefundMethod) : null,
+        sessionCancelledAt: cancel?.at ?? null,
+        sessionCancelDetail: cancel?.detail ?? null,
+      })
+    }
+  }
+  rows.sort((a, b) => {
+    const ax = a.sessionCancelledAt ?? '', bx = b.sessionCancelledAt ?? ''
+    return ax !== bx ? bx.localeCompare(ax) : a.customerName.localeCompare(b.customerName)
+  })
+  return rows
+}
+
+/** 退費歷史：已決定退費（refundDecision != null）的報名 + audit/Payment 推導後設資料 */
+export async function getRefundHistoryForUserAsync(scope: UserScope, filter?: RefundHistoryFilter): Promise<RefundHistoryRow[]> {
+  if (scope.role === 'none') return []
+  const sessionWhere: { venueId?: string | { in: string[] } } = { ...venueWhere(scope.visibleVenueIds) }
+  if (filter?.venueId && filter.venueId !== 'all') sessionWhere.venueId = filter.venueId
+  const where: Prisma.RegistrationWhereInput = { refundDecision: { not: null }, session: sessionWhere }
+  if (filter?.decision && filter.decision !== 'all') where.refundDecision = filter.decision
+
+  const regs = await prisma.registration.findMany({
+    where,
+    include: {
+      customer: { select: { name: true, phone: true } },
+      session: { include: { venue: { select: { name: true } } } },
+      payments: { select: { amount: true, method: true, status: true, notes: true, paidAt: true } },
+    },
+  })
+  const regIds = regs.map((r) => r.id)
+  const logs = regIds.length
+    ? await prisma.auditLog.findMany({
+        where: { entityType: 'Registration', entityId: { in: regIds }, action: { in: ['ISSUE_REFUND', 'WAIVE_REFUND'] } },
+        orderBy: { createdAt: 'desc' },
+        include: { user: { select: { name: true } } },
+      })
+    : []
+  const logByReg = new Map<string, (typeof logs)[number]>()
+  for (const log of logs) { if (log.entityId && !logByReg.has(log.entityId)) logByReg.set(log.entityId, log) }
+
+  const rows: RefundHistoryRow[] = regs.map((r) => {
+    const log = logByReg.get(r.id)
+    const decision = r.refundDecision as 'refunded' | 'waived'
+    let refundedAmount: number | null = null, refundMethod: RefundMethod | null = null, refundNotes: string | null = null, waiveReason: string | null = null
+    if (decision === 'refunded') {
+      const neg = r.payments.filter((p) => p.status === 'refunded' || p.amount < 0).sort((a, b) => b.paidAt.getTime() - a.paidAt.getTime())[0]
+      if (neg) { refundedAmount = Math.abs(neg.amount); refundMethod = neg.method as RefundMethod; refundNotes = neg.notes }
+    } else {
+      const nv = (log?.newValues ?? {}) as { reason?: string }
+      waiveReason = nv.reason ?? null
+    }
+    return {
+      registrationId: r.id,
+      decision,
+      decidedAt: log ? log.createdAt.toISOString() : null,
+      decidedBy: log?.user?.name ?? null,
+      refundedAmount, refundMethod, refundNotes, waiveReason,
+      sessionId: r.sessionId,
+      sessionDate: r.session.sessionDate.toISOString().split('T')[0],
+      sessionStartTime: r.session.startTime,
+      venueId: r.session.venueId,
+      venueName: r.session.venue?.name ?? '?',
+      customerId: r.customerId,
+      customerName: r.customer.name,
+      customerPhone: r.customer.phone,
+    }
+  })
+  rows.sort((a, b) => (b.decidedAt ?? '').localeCompare(a.decidedAt ?? ''))
+  return rows
+}
+
 // ── 季租單對帳（Round 9A）─────────────────────────────────────
 // 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
 export type SeasonRentalReconRow = {
