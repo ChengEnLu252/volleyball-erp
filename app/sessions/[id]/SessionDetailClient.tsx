@@ -70,8 +70,8 @@ export default function SessionDetailClient({
   const [payBusyId, setPayBusyId] = useState<string | null>(null)
   const [methodById, setMethodById] = useState<Record<string, PaymentMethod>>({})
 
-  const handleCollect = async (regId: string) => {
-    const method = methodById[regId] ?? 'cash'
+  const handleCollect = async (regId: string, fallback: PaymentMethod = 'cash') => {
+    const method = methodById[regId] ?? fallback
     setPayBusyId(regId)
     const res = await collectPaymentAction({ registrationId: regId, method })
     setPayBusyId(null)
@@ -266,8 +266,13 @@ export default function SessionDetailClient({
               {reg.type === 'season_player' ? (
                 <span style={{ fontSize: 11, color: '#aaa' }}>季打免費</span>
               ) : (
-                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: PAYMENT_COLOR[reg.paymentStatus]?.bg ?? '#f1f5f9', color: PAYMENT_COLOR[reg.paymentStatus]?.text ?? '#64748b' }}>
-                  {PAYMENT_LABEL[reg.paymentStatus] ?? reg.paymentStatus}
+                <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
+                  <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 8, background: PAYMENT_COLOR[reg.paymentStatus]?.bg ?? '#f1f5f9', color: PAYMENT_COLOR[reg.paymentStatus]?.text ?? '#64748b' }}>
+                    {PAYMENT_LABEL[reg.paymentStatus] ?? reg.paymentStatus}
+                  </span>
+                  {reg.paymentStatus !== 'paid' && reg.selfReportedPaid && (
+                    <span style={{ fontSize: 10, color: '#92400e' }}>🙋 已自助回報</span>
+                  )}
                 </span>
               )}
             </div>
@@ -286,15 +291,15 @@ export default function SessionDetailClient({
                 ) : <span style={{ fontSize: 11, color: '#ccc' }}>—</span>
               ) : canCollect ? (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <select value={methodById[reg.id] ?? 'cash'} onChange={e => setMethodById(m => ({ ...m, [reg.id]: e.target.value as PaymentMethod }))}
+                  <select value={methodById[reg.id] ?? reg.selfPaymentMethod ?? 'cash'} onChange={e => setMethodById(m => ({ ...m, [reg.id]: e.target.value as PaymentMethod }))}
                     style={{ fontSize: 11, padding: '4px 2px', borderRadius: 6, border: '1px solid #e0ddd4', background: '#fff', cursor: 'pointer' }}>
                     <option value="cash">現金</option>
                     <option value="transfer">轉帳</option>
                     <option value="online">線上</option>
                   </select>
-                  <button type="button" disabled={payBusyId === reg.id} onClick={() => handleCollect(reg.id)}
-                    style={{ fontSize: 11, padding: '4px 12px', borderRadius: 7, border: 'none', background: '#1a1917', color: '#d4a843', fontWeight: 600, cursor: payBusyId === reg.id ? 'default' : 'pointer', opacity: payBusyId === reg.id ? 0.5 : 1 }}>
-                    {payBusyId === reg.id ? '…' : '收款'}
+                  <button type="button" disabled={payBusyId === reg.id} onClick={() => handleCollect(reg.id, reg.selfPaymentMethod ?? 'cash')}
+                    style={{ fontSize: 11, padding: '4px 12px', borderRadius: 7, border: 'none', background: reg.selfReportedPaid ? '#92400e' : '#1a1917', color: '#d4a843', fontWeight: 600, cursor: payBusyId === reg.id ? 'default' : 'pointer', opacity: payBusyId === reg.id ? 0.5 : 1 }}>
+                    {payBusyId === reg.id ? '…' : (reg.selfReportedPaid ? '確認入帳' : '收款')}
                   </button>
                 </div>
               ) : <span style={{ fontSize: 11, color: '#ccc' }}>—</span>}

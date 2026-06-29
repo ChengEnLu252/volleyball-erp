@@ -45,8 +45,14 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   查當日／最近有場次的日子、依 venue scope）；`CheckinClient.tsx`（新）報到走 `setAttendanceAction`
   （`app/actions/checkin.ts`，attendance 不寫 audit）、收款走 `collectPaymentAction`、取消收款 `undoPaymentAction`。
   原 `markPaid()`/`toggleCheckin()` 純本地 state 退役。當日多場可切換。build 綠。
-- ⏳ **P2.1c 自助回報確認入帳**：`app/self-checkin/[sessionId]` 客戶「我已付款」走 server action
-  寫 Registration.selfReported*（**不建 Payment**）；後台一鍵「確認入帳」→ `collectPaymentAction`。
+- ✅ **P2.1c 自助回報確認入帳（已完成）**：
+  - 客戶端 `app/self-checkin/[sessionId]` 改 server 殼（`getSelfCheckinDataAsync`，公開、僅無人場次）+
+    `SelfCheckinClient`（新）；「我已付款」→ `reportSelfPaymentAction`（`app/actions/self-checkin.ts`，
+    只寫 `Registration.selfReported*`、**不建 Payment**、樂觀鎖、SELF_PAYMENT_REPORT audit）。
+  - `components/ChromeShell.tsx`：`/self-checkin/` 加公開白名單（否則客戶被 LoginGate 擋）。
+  - 後台「確認入帳」：`SessionRegRow` 加 `selfReportedPaid`/`selfPaymentMethod`，場次明細未付款列顯示
+    「🙋 已自助回報」、按鈕變「確認入帳」並預帶客戶回報的付款方式 → 走既有 `collectPaymentAction` 建真 Payment。
+  - build 綠 + 唯讀探針（無人場次 `s-ts90` @ Hibi）。
 - ⏳ **P2.1d 退費鏈**：`finance/refunds` 讀取殼 + 退費/放棄退費 server action。
   ⚠️ 前置：Prisma `Registration` **缺 `refundDecision` 欄位**、`AuditAction` enum **缺 `ISSUE_REFUND`/`WAIVE_REFUND`** → 需 migration。
 - ⏳ **P2.1e 場次收款對帳**：`reconciliation/sessions` 讀取殼（每場應收/實收/差額由 DB 計）。

@@ -604,6 +604,9 @@ export type SessionRegRow = {
   paymentStatus: 'paid' | 'unpaid' | 'partial' | 'refunded'
   paymentMethod: 'cash' | 'transfer' | 'online'
   expectedAmount: number
+  // P2.1c：客戶自助回報（僅無人場次；尚未經館長確認入帳）
+  selfReportedPaid: boolean
+  selfPaymentMethod: 'cash' | 'transfer' | 'online' | null
   customer: { name: string; phone: string | null; skillLevel: SkillLevel | null }
 }
 export type SessionDetailBundle = {
@@ -646,6 +649,8 @@ export async function getSessionDetailForUserAsync(
       paymentStatus: paid ? 'paid' : 'unpaid',
       paymentMethod: (paid?.method ?? 'cash') as SessionRegRow['paymentMethod'],
       expectedAmount: isSeasonPlayer ? 0 : fee,
+      selfReportedPaid: r.selfReportedPaid,
+      selfPaymentMethod: (r.selfPaymentMethod ?? null) as SessionRegRow['selfPaymentMethod'],
       customer: {
         name: r.customer.name,
         phone: r.customer.phone,
@@ -716,6 +721,8 @@ export async function getCheckinDataForUserAsync(scope: UserScope, todayStr?: st
         paymentStatus: paid ? 'paid' : 'unpaid',
         paymentMethod: (paid?.method ?? 'cash') as SessionRegRow['paymentMethod'],
         expectedAmount: isSeasonPlayer ? 0 : fee,
+        selfReportedPaid: r.selfReportedPaid,
+        selfPaymentMethod: (r.selfPaymentMethod ?? null) as SessionRegRow['selfPaymentMethod'],
         customer: { name: r.customer.name, phone: r.customer.phone, skillLevel: fromSkill(r.customer.skillLevel) },
       }
     })
@@ -723,6 +730,72 @@ export async function getCheckinDataForUserAsync(scope: UserScope, todayStr?: st
   })
 
   return { date: target, isToday: target === today, sessions }
+}
+
+// ── 自助回報（無人場次，公開）P2.1c ───────────────────────────
+export type SelfCheckinReg = {
+  registrationId: string
+  customerName: string
+  customerPhoneMasked: string
+  expectedAmount: number
+  selfReportedPaid: boolean
+  selfPaymentMethod: 'cash' | 'transfer' | 'online' | null
+  selfReportedAt: string | null
+  updatedAt: string
+}
+export type SelfCheckinBundle = {
+  sessionId: string
+  venueName: string
+  sessionDate: string
+  startTime: string
+  endTime: string
+  courtFee: number
+  acFee: number
+  acEnabled: boolean
+  totalAmount: number
+  payableRegistrations: SelfCheckinReg[]
+}
+
+/** 公開：無人場次自助回報所需資料（無登入 / 無 token；僅開放 isUnattended 場次）*/
+export async function getSelfCheckinDataAsync(sessionId: string): Promise<SelfCheckinBundle | null> {
+  const s = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: {
+      venue: { select: { name: true } },
+      registrations: {
+        where: { status: { not: 'cancelled' }, type: { not: 'season_player' } },
+        include: { customer: { select: { name: true, phone: true } } },
+      },
+    },
+  })
+  if (!s) return null
+  if (!s.isUnattended) return null
+  const totalAmount = s.courtFee + (s.acEnabled ? s.acFee : 0)
+  return {
+    sessionId: s.id,
+    venueName: s.venue?.name ?? '?',
+    sessionDate: s.sessionDate.toISOString().split('T')[0],
+    startTime: s.startTime,
+    endTime: s.endTime,
+    courtFee: s.courtFee,
+    acFee: s.acFee,
+    acEnabled: s.acEnabled,
+    totalAmount,
+    payableRegistrations: s.registrations.map((r) => {
+      const phone = r.customer.phone ?? ''
+      const masked = phone ? phone.slice(0, 4) + '-***-' + phone.slice(-3) : '（未提供）'
+      return {
+        registrationId: r.id,
+        customerName: r.customer.name,
+        customerPhoneMasked: masked,
+        expectedAmount: totalAmount,
+        selfReportedPaid: r.selfReportedPaid,
+        selfPaymentMethod: (r.selfPaymentMethod ?? null) as SelfCheckinReg['selfPaymentMethod'],
+        selfReportedAt: r.selfReportedAt ? r.selfReportedAt.toISOString() : null,
+        updatedAt: r.updatedAt.toISOString(),
+      }
+    }),
+  }
 }
 
 // ── 季租單對帳（Round 9A）─────────────────────────────────────

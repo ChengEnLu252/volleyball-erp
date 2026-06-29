@@ -24,8 +24,10 @@ export default function ChromeShell({ children }: { children: React.ReactNode })
   const isShopSite = pathname.startsWith('/shop/') || pathname === '/shop'
   // Round 5C：自助註冊頁（未登入即可進，無 ERP chrome / 登入閘門）
   const isRegister = pathname === '/register'
+  // P2.1c：無人場次客戶自助回報頁（顧客用，無 ERP chrome / 登入閘門）
+  const isSelfCheckin = pathname.startsWith('/self-checkin/')
 
-  if (isBookingSite || isCaptainSite || isShopSite || isRegister) {
+  if (isBookingSite || isCaptainSite || isShopSite || isRegister || isSelfCheckin) {
     // 公開頁 — 完全獨立，無 ERP chrome、無登入閘門
     return <>{children}</>
   }
