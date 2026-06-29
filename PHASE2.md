@@ -63,7 +63,14 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
     CANCEL_SESSION audit 推導）、`getRefundHistoryForUserAsync`（退費後設資料由負額 Payment + audit 推導，不另存欄位）。
   - `finance/refunds` 改 server 殼 + `RefundsClient`（新，待退費/歷史兩分頁，前端篩選，樂觀鎖+ConflictBanner）。
   - build 綠。測試：先收款→取消場次→退費頁出現待退費（seed 目前無已取消場次）。
-- ⏳ **P2.1e 場次收款對帳**：`reconciliation/sessions` 讀取殼（每場應收/實收/差額由 DB 計）。
+- ✅ **P2.1e 場次收款對帳（已完成）**：`queries.ts` 新增 `getSessionReconciliationForUserAsync`
+  （逐場：應收=臨打+補位×單人費、實收=sum(Payment.amount)、缺口、狀態 matched/shortfall/overpaid/no_charge、
+  無人場次自助回報異常旗標；期間 week/month/season/all）；`reconciliation/sessions` 改 server 殼（期間以
+  ?period= 重新 SSR）+ `SessionReconClient`（dual-mode：路由走 props/真 DB、collections 分頁走 store fallback）。
+  build 綠 + 唯讀探針（全期間應收 $4.89M / 實收 $4.16M / 缺口 $73 萬）。
+
+**🎉 P2.1 收款鏈全部完成**（a 收款 · b checkin · c 自助回報+確認入帳 · d 退費鏈 · e 場次對帳）。
+下一步：**P2.2 對帳 hub**（月記帳/報表/異常/無人場次/誠實商店；需補 `ledgerDay`、`boxAudit` 表）。
 
 ### P2.2 對帳系統 hub
 - 月記帳 `reconciliation/ledger`(+`/review`)、報表匯出 `finance/payments`、財務報表 `finance`、

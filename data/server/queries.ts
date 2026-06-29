@@ -961,6 +961,96 @@ export async function getRefundHistoryForUserAsync(scope: UserScope, filter?: Re
   return rows
 }
 
+// ── 場次對帳（P2.1e）───────────────────────────────────────────
+// 形狀對齊 data/api.ts 的 SessionReconciliation。實收 = sum(該場報名的 Payment.amount)。
+export type SessionReconStatus = 'matched' | 'shortfall' | 'overpaid' | 'no_charge'
+export type SessionReconRow = {
+  sessionId: string
+  sessionDate: string
+  startTime: string
+  endTime: string
+  venueId: string
+  venueName: string
+  courtFee: number
+  acFee: number
+  acEnabled: boolean
+  walkInCount: number
+  substituteCount: number
+  seasonPlayerCount: number
+  expectedRevenue: number
+  grossExpectedRevenue: number
+  actualRevenue: number
+  gap: number
+  unpaidCount: number
+  status: SessionReconStatus
+  isUnattended: boolean
+  hasSelfReportMismatch: boolean
+}
+export type SessionReconFilter = { period?: 'week' | 'month' | 'season' | 'all'; venueId?: string; onlyShortfall?: boolean }
+
+export async function getSessionReconciliationForUserAsync(scope: UserScope, filter?: SessionReconFilter): Promise<SessionReconRow[]> {
+  if (scope.role === 'none') return []
+  const period = filter?.period ?? 'week'
+  const today = new Date().toISOString().split('T')[0]
+  const addDays = (d: string, n: number) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().split('T')[0] }
+  let range: { from: string; to: string } | null = null
+  if (period === 'week') range = { from: addDays(today, -6), to: today }
+  else if (period === 'month') range = { from: addDays(today, -29), to: today }
+  else if (period === 'season') { const s = await getActiveSeasonAsync(); range = s ? { from: s.startDate, to: s.endDate } : null }
+
+  const where: Prisma.SessionWhereInput = { ...venueWhere(scope.visibleVenueIds) }
+  if (filter?.venueId) where.venueId = filter.venueId
+  if (range) where.sessionDate = { gte: new Date(range.from), lte: new Date(range.to) }
+
+  const sessions = await prisma.session.findMany({
+    where,
+    include: {
+      venue: { select: { name: true } },
+      registrations: {
+        where: { status: { not: 'cancelled' } },
+        select: { type: true, selfReportedPaid: true, payments: { select: { amount: true, status: true } } },
+      },
+    },
+  })
+
+  const rows: SessionReconRow[] = sessions.map((s) => {
+    const regs = s.registrations
+    const walkIn = regs.filter((r) => r.type === 'walk_in').length
+    const sub = regs.filter((r) => r.type === 'season_substitute').length
+    const seasonP = regs.filter((r) => r.type === 'season_player').length
+    const feePerHead = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const expected = feePerHead * (walkIn + sub)
+    const grossExpected = feePerHead * (walkIn + sub + seasonP)
+    let actual = 0, unpaid = 0, paymentRows = 0
+    for (const r of regs) {
+      actual += r.payments.reduce((a, p) => a + p.amount, 0)
+      paymentRows += r.payments.length
+      if (r.type !== 'season_player' && !r.payments.some((p) => p.status === 'paid')) unpaid++
+    }
+    const gap = expected - actual
+    const status: SessionReconStatus = expected === 0 ? 'no_charge' : gap > 0 ? 'shortfall' : gap < 0 ? 'overpaid' : 'matched'
+    let hasSelfReportMismatch = false
+    if (s.isUnattended) {
+      const selfReports = regs.filter((r) => r.selfReportedPaid).length
+      hasSelfReportMismatch = selfReports > paymentRows
+    }
+    return {
+      sessionId: s.id,
+      sessionDate: s.sessionDate.toISOString().split('T')[0],
+      startTime: s.startTime, endTime: s.endTime,
+      venueId: s.venueId, venueName: s.venue?.name ?? '?',
+      courtFee: s.courtFee, acFee: s.acFee, acEnabled: s.acEnabled,
+      walkInCount: walkIn, substituteCount: sub, seasonPlayerCount: seasonP,
+      expectedRevenue: expected, grossExpectedRevenue: grossExpected, actualRevenue: actual,
+      gap, unpaidCount: unpaid, status, isUnattended: s.isUnattended, hasSelfReportMismatch,
+    }
+  })
+
+  const filtered = filter?.onlyShortfall ? rows.filter((r) => r.gap > 0) : rows
+  filtered.sort((a, b) => b.sessionDate.localeCompare(a.sessionDate) || a.startTime.localeCompare(b.startTime))
+  return filtered
+}
+
 // ── 季租單對帳（Round 9A）─────────────────────────────────────
 // 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
 export type SeasonRentalReconRow = {
