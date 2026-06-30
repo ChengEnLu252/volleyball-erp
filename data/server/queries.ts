@@ -24,7 +24,7 @@ import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
 import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
   SkillLevel, SessionStatus, SeasonRentalStatus,
-  LedgerDay, LedgerSlotValue,
+  LedgerDay, LedgerSlotValue, PartTimerPayrollSheet,
 } from '@/types'
 import {
   LEDGER_AC_RATE, computeLedgerDerived, weekdayOf, summarizeLedgerMonth, ledgerCell,
@@ -1873,5 +1873,39 @@ export async function getLedgerReviewAsync(scope: UserScope, venueId: string, ym
     venueId, venueName, ym, rate: LEDGER_AC_RATE,
     daily, monthly, storeOnly, empty: days.length === 0,
     totals: { court: sum((r) => r.court), merch: sum((r) => r.merch), refund: sum((r) => r.refund), flaggedCells },
+  }
+}
+
+// ── 薪資（P2.3）─────────────────────────────────────────────────
+// 系統推導輸入改查真 DB（取代 payroll.ts 的 GENERATED 版）；計算公式走 data/payroll-core。
+
+/** 某館某月「系統營收」= 已收 Payment（場次當月，正額）+ 商品銷售。供薪資比例分母 / 獎金基準。 */
+export async function getMonthlyVenueRevenueAsync(venueId: string, ym: string): Promise<number> {
+  const { gte, lt } = monthBounds(ym)
+  const sessions = await prisma.session.findMany({
+    where: { venueId, sessionDate: { gte, lt }, status: { not: 'cancelled' } },
+    select: { registrations: { select: { payments: { where: { status: 'paid' }, select: { amount: true } } } } },
+  })
+  let revenue = 0
+  for (const s of sessions) for (const r of s.registrations) for (const p of r.payments) if (p.amount > 0) revenue += p.amount
+  const tx = await prisma.productTransaction.aggregate({
+    where: { venueId, type: 'sale', operatedAt: { gte, lt } }, _sum: { totalAmount: true },
+  })
+  return revenue + (tx._sum.totalAmount ?? 0)
+}
+
+/** 某館某月工讀生薪資表（raw，供編輯）；無則回空表。venue 不在 scope → 空表。 */
+export async function getPartTimerSheetRawAsync(scope: UserScope, venueId: string, ym: string): Promise<PartTimerPayrollSheet> {
+  const empty: PartTimerPayrollSheet = { venueId, month: ym, rows: [], revenueOverride: null, updatedBy: '', updatedAt: '' }
+  if (!venueInScope(scope, venueId)) return empty
+  const row = await prisma.partTimerSheet.findUnique({ where: { venueId_month: { venueId, month: ym } } })
+  if (!row) return empty
+  return {
+    venueId: row.venueId,
+    month: row.month,
+    rows: (row.rows ?? []) as unknown as PartTimerPayrollSheet['rows'],
+    revenueOverride: row.revenueOverride,
+    updatedBy: row.updatedBy,
+    updatedAt: iso(row.updatedAt)!,
   }
 }

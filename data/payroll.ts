@@ -24,13 +24,18 @@ import { getMonthlyReconciliation } from './api'
 import {
   getAllPartTimerSheets, getAllManagerSalaries,
 } from './store'
-import {
-  STAFF_LEVEL_DEFAULT_RATE,
-} from '@/types'
 import type {
-  PartTimerRow, PartTimerPayrollSheet, ManagerSalaryRecord,
-  OffPeakBonusRule, YearEndBonusConfig, StaffLevel, UUID,
+  PartTimerPayrollSheet, ManagerSalaryRecord,
+  OffPeakBonusRule, YearEndBonusConfig,
 } from '@/types'
+import { computePartTimerSheetCore } from './payroll-core'
+
+// 工讀生時薪純核心抽到 data/payroll-core.ts（client+server 共用）；此處 re-export 保持相容。
+export {
+  WAGE_RATIO_LIMIT_DEFAULT, WAGE_RATIO_LIMIT_HSINCHU, WAGE_RATIO_PENALTY,
+  getWageRatioLimit, defaultRateForLevel, computePartTimerRow,
+} from './payroll-core'
+export type { PartTimerRowComputed, PartTimerSheetComputed } from './payroll-core'
 
 
 // ============================================================
@@ -70,17 +75,6 @@ export const OPERATING_FLOOR: Record<string, number> = {
 }
 export function getOperatingFloor(venueId: string): number {
   return OPERATING_FLOOR[venueId] ?? 180000
-}
-
-/**
- * 工讀生薪資佔營收比例上限（規章 6-3 成本控管）：
- * 一般館 11%、新竹館(v6) 12%；超標該月罰 1,000 元。
- */
-export const WAGE_RATIO_LIMIT_DEFAULT = 0.11
-export const WAGE_RATIO_LIMIT_HSINCHU = 0.12
-export const WAGE_RATIO_PENALTY = 1000
-export function getWageRatioLimit(venueId: string): number {
-  return venueId === 'v6' ? WAGE_RATIO_LIMIT_HSINCHU : WAGE_RATIO_LIMIT_DEFAULT
 }
 
 /**
@@ -188,56 +182,9 @@ export function getOffPeakCourtRevenue(venueId: string, month: string): number {
 // 3. 衍生計算
 // ============================================================
 
-export interface PartTimerRowComputed extends PartTimerRow {
-  /** 正常薪水 = 時數 × 時薪 */
-  normalSalary: number
-  /** 總薪水 = 正常薪水 + 獎金 − 罰款 */
-  total: number
-}
-
-export function computePartTimerRow(row: PartTimerRow): PartTimerRowComputed {
-  const normalSalary = Math.round(row.normalHours * row.hourlyRate)
-  const total = normalSalary + row.bonus - row.penalty
-  return { ...row, normalSalary, total }
-}
-
-export interface PartTimerSheetComputed {
-  venueId: UUID
-  month: string
-  rows: PartTimerRowComputed[]
-  /** 本月薪水（各列 total 加總） */
-  monthTotal: number
-  /** 本月營收（人工覆寫優先，否則系統值） */
-  revenue: number
-  /** 本月營收是否來自系統（非人工覆寫） */
-  revenueFromSystem: boolean
-  /** 系統營收（供對照） */
-  systemRevenue: number
-  /** 薪資比例 = 本月薪水 / 本月營收 */
-  ratio: number
-  /** 比例上限（規章 6-3：一般 11%、新竹 12%） */
-  ratioLimit: number
-  /** 是否超過上限 */
-  overLimit: boolean
-  /** 超標罰款（規章 6-3：該月 1,000 元） */
-  wageRatioPenalty: number
-}
-
-export function computePartTimerSheet(sheet: PartTimerPayrollSheet): PartTimerSheetComputed {
-  const rows = sheet.rows.map(computePartTimerRow)
-  const monthTotal = rows.reduce((s, r) => s + r.total, 0)
-  const systemRevenue = getSystemMonthlyVenueRevenue(sheet.venueId, sheet.month)
-  const revenueFromSystem = sheet.revenueOverride == null
-  const revenue = revenueFromSystem ? systemRevenue : sheet.revenueOverride!
-  const ratio = revenue > 0 ? monthTotal / revenue : 0
-  const ratioLimit = getWageRatioLimit(sheet.venueId)
-  const overLimit = ratio > ratioLimit
-  const wageRatioPenalty = overLimit ? WAGE_RATIO_PENALTY : 0
-  return {
-    venueId: sheet.venueId, month: sheet.month, rows, monthTotal,
-    revenue, revenueFromSystem, systemRevenue, ratio,
-    ratioLimit, overLimit, wageRatioPenalty,
-  }
+/** 工讀生薪資表衍生計算（store/GENERATED 版）：systemRevenue 由月對帳取得，委派 core 公式。 */
+export function computePartTimerSheet(sheet: PartTimerPayrollSheet) {
+  return computePartTimerSheetCore(sheet, getSystemMonthlyVenueRevenue(sheet.venueId, sheet.month))
 }
 
 export interface OffPeakBonusResult {
@@ -384,9 +331,6 @@ export function computeManagerSalary(record: ManagerSalaryRecord): ManagerSalary
 // 4. 等級 → 預設時薪（建立新列時用）
 // ============================================================
 
-export function defaultRateForLevel(level: StaffLevel): number {
-  return STAFF_LEVEL_DEFAULT_RATE[level]
-}
 
 
 // ============================================================

@@ -46,6 +46,7 @@ model Venue {
   productTransactions ProductTransaction[]
   anomalyAlerts       AnomalyAlert[]
   ledgerDays          LedgerDay[]
+  partTimerSheets     PartTimerSheet[]
 
   @@map("venues")
 }
@@ -76,6 +77,7 @@ model User {
   productTransactions ProductTransaction[]
   auditLogs           AuditLog[]
   ledgerDays          LedgerDay[]
+  partTimerSheets     PartTimerSheet[]
 
   @@map("users")
 }
@@ -648,4 +650,29 @@ model LedgerDay {
   @@unique([venueId, date])
   @@index([venueId, date])
   @@map("ledger_days")
+}
+
+
+// ── 工讀生時薪表（P2.3a）───────────────────────────────────────
+// 每館每月一張。rows = PartTimerRow[]（姓名/等級/時薪/時數/獎金/罰款/備註）以 JSON 存。
+// 計算（正常薪水/總薪水/薪資比例）由 data/payroll-core 即時算、不存。
+
+model PartTimerSheet {
+  id              String   @id @default(uuid())
+  venueId         String   @map("venue_id")
+  /// 月份 YYYY-MM
+  month           String   @db.VarChar(7)
+  /// PartTimerRow[]（JSON）
+  rows            Json     @default("[]")
+  /// 本月營收人工覆寫；null = 用系統值（薪資比例分母）
+  revenueOverride Int?     @map("revenue_override")
+  updatedBy       String   @map("updated_by")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  venue   Venue @relation(fields: [venueId], references: [id])
+  updater User  @relation(fields: [updatedBy], references: [id])
+
+  @@unique([venueId, month])
+  @@index([venueId, month])
+  @@map("part_timer_sheets")
 }

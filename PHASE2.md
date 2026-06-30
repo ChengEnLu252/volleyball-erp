@@ -103,10 +103,18 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   build 綠 + 探針（ledger_days 新表 0 列；對帳系統側 球魔方 2.0 2026-07：48 場/15 天、已收 $117,630）。
 - ⏳ **P2.2e 誠實商店** `reconciliation/honest-shop`（**需 `boxAudit`**，併 P2.4 商品做）。
 
-### P2.3 薪資 / 績效
-- 工讀生時薪、管理職薪資（**`data/payroll.ts` 計算邏輯不動**，依《旭日管理規章》，只改吃 DB 資料）、
-  館長週目標(`goals` 讀 + 提交/確認 server action)。
-- 需補表：`partTimerSheet`、`managerSalary`、`weeklyGoal`、`appNotification`。
+### P2.3 薪資 / 績效（**`data/payroll.ts` 計算公式不動**，依《旭日管理規章》，只改吃 DB）
+- ✅ **P2.3a 工讀生時薪（已完成）**：新表 `part_timer_sheets`（一館一月一張，rows JSON，migration
+  `20260630130000`）。純計算抽到 `data/payroll-core.ts`（client+server 共用，公式不變；系統營收改由呼叫端注入）；
+  `data/payroll.ts` re-export 並保留 GENERATED 版 wrapper（year-end 仍用）。server：`getMonthlyVenueRevenueAsync`
+  （系統營收＝真 Payment 已收＋商品銷售）、`getPartTimerSheetRawAsync`。`savePartTimerSheetAction` +
+  `loadPartTimerSheetAction`（owner/manager+scope+AuditLog）。`reconciliation/payroll` 頁改 **client 自取 server
+  action**（薪資比例即時用 core 算），不拖 server-only → `staff-pay` hub 直接嵌入。
+  build 綠 + 探針（part_timer_sheets 0 列；系統營收 球魔方 2.0 2026-07 = $117,630）。
+- ⏳ **P2.3b 管理職薪資**：新表 `manager_salaries`；冷門場次獎金/年終的系統推導改查 DB（payroll-core 注入）；
+  `reconciliation/payroll/manager` 頁接 DB。
+- ⏳ **P2.3c 館長週目標 + 通知**：新表 `weekly_goals` + `app_notifications`；`goals` 頁讀+提交/確認 action、
+  通知收件匣落 DB（真實 LINE/Email push 留 P4）。
 
 ### P2.4 商品 / 商城（財務鏈完成後）
 - 跨館庫存查詢 / 調貨(`products` + `products/transfers`)、線上商城(`shop/*`)、後台訂單(`orders`)、誠實商店庫存。
