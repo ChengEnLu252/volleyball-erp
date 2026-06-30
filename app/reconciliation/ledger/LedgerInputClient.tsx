@@ -169,10 +169,18 @@ export default function LedgerInputClient({ initialVenue, initialYm }: { initial
           subtitle="館長每日記帳：填好後系統自動算小計／總計，老闆即可對帳"
           backTo="/reconciliation"
           actions={
-            <a href={`/reconciliation/ledger/review?venue=${venueId}&ym=${ym}`} style={{
-              fontSize: 13, color: '#10b981', textDecoration: 'none', fontWeight: 600,
-              border: '1px solid #a7f3d0', borderRadius: 8, padding: '7px 12px', background: '#ecfdf5',
-            }}>老闆對帳 →</a>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {canEdit && (
+                <a href="/reconciliation/ledger/import" style={{
+                  fontSize: 13, color: '#2563eb', textDecoration: 'none', fontWeight: 600,
+                  border: '1px solid #bfdbfe', borderRadius: 8, padding: '7px 12px', background: '#eff6ff',
+                }}>📤 Excel 匯入</a>
+              )}
+              <a href={`/reconciliation/ledger/review?venue=${venueId}&ym=${ym}`} style={{
+                fontSize: 13, color: '#10b981', textDecoration: 'none', fontWeight: 600,
+                border: '1px solid #a7f3d0', borderRadius: 8, padding: '7px 12px', background: '#ecfdf5',
+              }}>老闆對帳 →</a>
+            </div>
           }
         />
 

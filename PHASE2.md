@@ -158,7 +158,12 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
     - 沿用並收緊現有報名自動建檔去重邏輯（見 `data/server` 報名 action）。
   - LINE 在這裡只負責「**該館的登入身分** + **該館官方帳號發通知的 userId**」；真正的客戶身分鑰匙是手機號＋姓名。
 - ~~**真 AI 摘要**：`app/api/ai/route.ts` 接 Claude API~~ → **對方 2026-06-30 決定先不做**（未來再通知）；維持罐頭回覆。
-- **Excel 匯入**：上傳 → 解析 → 欄位對應 → 批量 upsert（客戶 + 歷史帳）。
+- 🟡 **Excel 匯入（月記帳藍本完成）**：`exceljs` 解析對方月記帳 Excel（時段×日期矩陣，移植自
+  `client-data/parse_ledger.py` 同座標）→ 預覽 → 選球館 → upsert `ledger_days`。
+  actions：`parseLedgerExcelAction`(FormData→預覽)/`importLedgerDaysAction`(upsert+audit)/`getImportVenuesAction`；
+  頁 `reconciliation/ledger/import`（server 殼 RequireRole + client 自取）；月記帳輸入頁加「📤 Excel 匯入」入口。
+  時段標籤正規化對應 `LEDGER_SLOTS`。**驗證：對真八德 Excel 解析 5 月分頁/155 天、時段全對應、場地費加總 $2,494,175。**
+  授權 owner/manager + venue scope。客戶名單 CSV 匯入待之後（同框架）。
 - **通知管道**：收件匣事件 → 真 LINE（Messaging API）/ Email 發送。每館用**自己的官方帳號**發（報名飛翼 → 飛翼官方帳號回成功通知）。
 
 ---
