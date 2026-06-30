@@ -1228,6 +1228,87 @@ export async function getUnattendedReportForUserAsync(scope: UserScope): Promise
   }
 }
 
+// ── 異常清單（P2.2b）───────────────────────────────────────────
+// 形狀對齊 data/api.ts 的 ReconciliationAnomaly。目前由已遷 DB 資料產生 3 類：
+//   rental_unpaid（季租未繳齊）、session_shortfall（近 7 天場次少收 ≥$200）、
+//   self_report_mismatch（無人場次自助回報筆數 > Payment 筆數）。
+//   gift_excess（商品，P2.4）、ledger_*（月記帳，P2.2d）待對應子系統遷移後補。
+export type ReconAnomalyType = 'rental_unpaid' | 'session_shortfall' | 'self_report_mismatch'
+export type ReconAnomalyRow = {
+  id: string
+  type: ReconAnomalyType
+  severity: 'high' | 'medium' | 'low'
+  venueId: string
+  venueName: string
+  date?: string
+  title: string
+  description: string
+  amount: number
+  linkType: 'session' | 'rental' | 'product' | 'ledger'
+  linkId: string
+}
+
+export async function getReconciliationAnomaliesForUserAsync(scope: UserScope): Promise<ReconAnomalyRow[]> {
+  if (scope.role === 'none') return []
+  const out: ReconAnomalyRow[] = []
+
+  // 1. 季租單未繳齊
+  for (const r of await getSeasonRentalReconciliationForUserAsync(scope)) {
+    if (r.gap <= 0) continue
+    out.push({
+      id: `anom-rental-${r.rentalId}`, type: 'rental_unpaid',
+      severity: r.paidRatio < 0.6 ? 'high' : r.paidRatio < 0.9 ? 'medium' : 'low',
+      venueId: r.venueId, venueName: r.venueName,
+      title: `${r.captainName} 季租單未繳齊（${Math.round(r.paidRatio * 100)}%）`,
+      description: `${r.timeslotLabel}：應收 $${r.totalAmount.toLocaleString()}，實收 $${r.paidAmount.toLocaleString()}`,
+      amount: r.gap, linkType: 'rental', linkId: r.rentalId,
+    })
+  }
+
+  // 2. 場次少收（近 7 天，缺口 ≥ $200）
+  for (const s of await getSessionReconciliationForUserAsync(scope, { period: 'week' })) {
+    if (s.gap < 200) continue
+    out.push({
+      id: `anom-session-${s.sessionId}`, type: 'session_shortfall',
+      severity: s.gap >= 1000 ? 'high' : s.gap >= 500 ? 'medium' : 'low',
+      venueId: s.venueId, venueName: s.venueName, date: s.sessionDate,
+      title: `${s.venueName} ${s.sessionDate} ${s.startTime} 少收 $${s.gap.toLocaleString()}`,
+      description: `應收 $${s.expectedRevenue.toLocaleString()}，實收 $${s.actualRevenue.toLocaleString()}（${s.unpaidCount} 人未繳）`,
+      amount: s.gap, linkType: 'session', linkId: s.sessionId,
+    })
+  }
+
+  // 3. 無人場次自助回報筆數 > Payment 筆數（全部無人場次，不設 lookback）
+  const unatt = await prisma.session.findMany({
+    where: { isUnattended: true, ...venueWhere(scope.visibleVenueIds) },
+    include: {
+      venue: { select: { name: true } },
+      registrations: { where: { status: { not: 'cancelled' } }, select: { selfReportedPaid: true, payments: { select: { id: true } } } },
+    },
+  })
+  for (const s of unatt) {
+    const selfReports = s.registrations.filter((r) => r.selfReportedPaid).length
+    const payments = s.registrations.reduce((a, r) => a + r.payments.length, 0)
+    if (selfReports <= payments) continue
+    const missing = selfReports - payments
+    const amount = (s.courtFee + (s.acEnabled ? s.acFee : 0)) * missing
+    const vname = s.venue?.name ?? '?'
+    const date = s.sessionDate.toISOString().split('T')[0]
+    out.push({
+      id: `anom-selfreport-${s.id}`, type: 'self_report_mismatch',
+      severity: missing >= 3 ? 'high' : 'medium',
+      venueId: s.venueId, venueName: vname, date,
+      title: `${vname} ${date} 自助回報 ${missing} 筆未對到 Payment`,
+      description: `自助回報 ${selfReports} 筆 vs 系統 Payment ${payments} 筆，落差約 $${amount.toLocaleString()}`,
+      amount, linkType: 'session', linkId: s.id,
+    })
+  }
+
+  const sevOrder = { high: 0, medium: 1, low: 2 } as const
+  out.sort((a, b) => sevOrder[a.severity] - sevOrder[b.severity] || b.amount - a.amount)
+  return out
+}
+
 // ── 季租單對帳（Round 9A）─────────────────────────────────────
 // 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
 export type SeasonRentalReconRow = {

@@ -78,7 +78,10 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   自助回報 vs 實際入帳對照、信任落差、可疑客戶≥3 次未回報；各場內嵌 drill-down rows）；
   `reconciliation/unattended` 改 server 殼 + `UnattendedClient`（dual-mode，collections 分頁走 store）。
   提醒鈕 `sendSelfReportReminderAction` 為 **P2.5 placeholder**（通知管道未接）。build 綠 + 探針（lookback 內 7 場、86 筆自助回報）。
-- ⏳ **P2.2b 異常清單** `reconciliation/anomalies`（讀既有 `AnomalyAlert` 表，免新表）。
+- ✅ **P2.2b 異常清單（已完成）**：`getReconciliationAnomaliesForUserAsync`（由已遷 DB 資料即時產生
+  3 類：季租未付 / 近 7 天場次少收≥$200 / 無人場次自助回報>Payment）；`reconciliation/anomalies` 改 server 殼
+  + `AnomaliesClient`（純 props，類型/嚴重度/球館前端篩選；anomalies 未被 collections 嵌入，免 dual-mode）。
+  商品贈送(P2.4)、月記帳異常(P2.2d) 待對應子系統遷移後補。build 綠 + 探針（近 7 天 113 場少收）。
 - ⏳ **P2.2c 財務報表** `finance` + 報表匯出 `finance/payments`（Payment 彙總，免新表）。
 - ⏳ **P2.2d 月記帳** `reconciliation/ledger`(+`/review`)（**需新表 `ledgerDay`** + 記帳 upsert action）。
 - ⏳ **P2.2e 誠實商店** `reconciliation/honest-shop`（**需 `boxAudit`**，併 P2.4 商品做）。
