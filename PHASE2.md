@@ -128,9 +128,18 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   build 綠 + 探針（weekly_goals/app_notifications 0 列；通知對象池 manager 2 筆、owner 1 人）。
   > ✅ **P2.3 薪資/績效 全部完成**（a 工讀生 / b 管理職 / c 週目標+通知）。
 
-### P2.4 商品 / 商城（財務鏈完成後）
-- 跨館庫存查詢 / 調貨(`products` + `products/transfers`)、線上商城(`shop/*`)、後台訂單(`orders`)、誠實商店庫存。
-- 需補表：`shopProduct`、`order`、`productTransfer`。
+### P2.4 商品 / 商城（依序 a→b→c→d）
+- ✅ **P2.4a 商品庫存 + 異動（已完成）**：`Product.isHonestShop` 欄位（migration `20260630160000`）。
+  server：`getVenueProductsForUserAsync`（各館庫存＝該館限定＋全館共用商品）、`getProductTransactionsForUserAsync`
+  （流向，join 商品/操作員/客戶）、`getProductReconciliationForUserAsync`（近 30 天販售/贈送、贈送比例異常，
+  對齊 `api.getProductReconciliation`）。`products` / `reconciliation/products` 改 **client 自取 server action**
+  （`loadProductsViewAction` / `loadProductReconciliationAction`）→ 不拖 server-only，`collections` hub 仍可嵌入。
+  目前 demo 無「販售/贈送/盤點」互動 UI（皆 seed 資料）→ 本回合純讀取。DB 商品 seed 稀疏（4 項，placeholder）。
+  build 綠 + 探針（近 30 天：運動飲料售112/$3,920、護膝售99/$27,720、排球售93/$79,050、球魔方帽售113/$28,250）。
+- ⏳ **P2.4b 跨館調貨**：新表 `product_transfers`（申請→出貨→收貨→完成，樂觀鎖）；`products/transfers` 頁接 DB。
+- ⏳ **P2.4c 線上商城 + 訂單**：新表 `shop_products` + `orders` + `order_items`（獨立線上庫存池、金流手動標記留 P2.5）。
+- ⏳ **P2.4d 誠實商店（=P2.2e）+ 收尾**：新表 `box_audits`；串月記帳「誠實商店」桶、異常「商品贈送過量(gift_excess)」、
+  dashboard 商品營收。
 
 ### P2.5 外接整合（可與上面並行）
 - **真 LINE 登入**：LINE OAuth 接客戶報名端（取代 `components/booking/LineLoginModal` 的 mock）。

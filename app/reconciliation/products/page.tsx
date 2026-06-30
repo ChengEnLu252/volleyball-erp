@@ -2,46 +2,36 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import {
-  getCurrentVisibleVenueIds,
-  getProductReconciliation,
-  listVenues,
-} from '@/data/api'
-import { useStoreSync } from '@/data/store'
-import {
   ReconHeader, StatCard, Panel, Badge, ProgressBar, VENUE_COLOR,
 } from '@/components/reconciliation/Common'
+import { loadProductReconciliationAction, type ProductReconBundle } from '@/app/actions/products'
 
 export default function ProductReconciliationPage() {
   const [venueId, setVenueId] = useState<string>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
-  const storeVersion = useStoreSync()
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
+  // P2.4a：資料自取自 server action（已 scope）
+  const [bundle, setBundle] = useState<ProductReconBundle | null>(null)
+  useEffect(() => {
+    let alive = true
+    loadProductReconciliationAction().then((res) => { if (alive) setBundle(res) })
+    return () => { alive = false }
+  }, [])
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
-
-  const allVenues = listVenues().filter(v => v.isActive)
-  const venues = visible === 'all' ? allVenues : allVenues.filter(v => visible.includes(v.id))
+  const venues = bundle?.ok ? bundle.venues : []
+  const raw = bundle?.ok ? bundle.products : []
 
   useEffect(() => {
-    if (visible !== 'all' && venueId !== 'all' && !visible.includes(venueId)) {
-      setVenueId('all')
-    }
-  }, [visible, venueId])
+    if (venueId !== 'all' && !venues.some((v) => v.id === venueId)) setVenueId('all')
+  }, [venues, venueId])
 
   const products = useMemo(() => {
-    const raw = getProductReconciliation({
-      venueId: venueId === 'all' ? undefined : venueId,
-    })
-    // 視角過濾：byVenue 也要剃除 manager 看不到的館
-    const filtered = visible === 'all'
+    // 選定單館時：byVenue 只留該館並重算全品數字
+    const filtered = venueId === 'all'
       ? raw
       : raw
-          .map(p => {
-            const byVenue = p.byVenue.filter(b => visible.includes(b.venueId))
-            // 重算各館加總後的全品數字（byVenue 只有 sale/giftCount，金額用 unitPrice 推）
+          .map((p) => {
+            const byVenue = p.byVenue.filter((b) => b.venueId === venueId)
             const saleCount   = byVenue.reduce((s, v) => s + v.saleCount, 0)
             const giftCount   = byVenue.reduce((s, v) => s + v.giftCount, 0)
             const saleRevenue = saleCount * p.unitPrice
@@ -50,13 +40,12 @@ export default function ProductReconciliationPage() {
             const giftRatio = total === 0 ? 0 : giftCount / total
             return { ...p, byVenue, saleCount, giftCount, saleRevenue, giftValue, giftRatio }
           })
-          .filter(p => p.byVenue.length > 0)
-    // 異常的優先排前面，再依贈比降冪
+          .filter((p) => p.byVenue.length > 0)
     return filtered.sort((a, b) => {
       if (a.hasGiftAnomaly !== b.hasGiftAnomaly) return a.hasGiftAnomaly ? -1 : 1
       return b.giftRatio - a.giftRatio
     })
-  }, [venueId, visible])
+  }, [venueId, raw])
 
   const totals = useMemo(() => ({
     count: products.length,

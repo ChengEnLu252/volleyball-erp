@@ -473,6 +473,8 @@ model Product {
   currentStock      Int      @default(0) @map("current_stock")
   lowStockThreshold Int      @default(5) @map("low_stock_threshold")
   isActive          Boolean  @default(true) @map("is_active")
+  /// 誠實商店（投錢箱、無人販售）商品 — 納入 /reconciliation/honest-shop 對帳（P2.4d）
+  isHonestShop      Boolean  @default(false) @map("is_honest_shop")
   createdAt         DateTime @default(now()) @map("created_at")
 
   // 關聯

@@ -2023,3 +2023,100 @@ export async function getNotificationsForUserAsync(userId: string): Promise<AppN
 export async function getUnreadNotificationCountAsync(userId: string): Promise<number> {
   return prisma.appNotification.count({ where: { recipientUserId: userId, isRead: false } })
 }
+
+// ── 商品庫存 + 異動（P2.4a）─────────────────────────────────────
+// 商品檢視/流向/對帳改查真 DB（取代 GENERATED.venueProducts / productTransactions）。
+// 共用商品（venueId=null）視為各館皆有；庫存為全域單一數字。
+
+export type VenueProductRow = {
+  id: string; name: string; unitPrice: number; currentStock: number
+  lowStockThreshold: number; isShared: boolean; isHonestShop: boolean
+}
+export type VenueProductGroup = { venueId: string; venueName: string; products: VenueProductRow[] }
+
+/** 各館庫存（每館 = 該館限定商品 + 全館共用商品）。owner 看全部，scope 過濾。 */
+export async function getVenueProductsForUserAsync(scope: UserScope): Promise<VenueProductGroup[]> {
+  if (scope.role === 'none') return []
+  const venues = (await getVenuesForUserAsync(scope)).filter((v) => v.isActive)
+  const products = await prisma.product.findMany({ where: { isActive: true }, orderBy: { name: 'asc' } })
+  const shared = products.filter((p) => p.venueId == null)
+  return venues.map((v) => ({
+    venueId: v.id, venueName: v.name,
+    products: [
+      ...products.filter((p) => p.venueId === v.id),
+      ...shared,
+    ].map((p) => ({
+      id: p.id, name: p.name, unitPrice: p.unitPrice, currentStock: p.currentStock,
+      lowStockThreshold: p.lowStockThreshold, isShared: p.venueId == null, isHonestShop: p.isHonestShop,
+    })),
+  }))
+}
+
+/** 商品流向紀錄（scope 過濾，新到舊；join 商品/操作員/客戶名稱）。 */
+export async function getProductTransactionsForUserAsync(scope: UserScope, limit = 200) {
+  if (scope.role === 'none') return []
+  const rows = await prisma.productTransaction.findMany({
+    where: venueWhere(scope.visibleVenueIds),
+    include: { product: { select: { name: true } }, operator: { select: { name: true } }, customer: { select: { name: true } } },
+    orderBy: { operatedAt: 'desc' },
+    take: limit,
+  })
+  return rows.map((t) => ({
+    id: t.id, productId: t.productId, venueId: t.venueId, operatedBy: t.operatedBy,
+    type: t.type, quantity: t.quantity, unitPrice: t.unitPrice, totalAmount: t.totalAmount,
+    customerId: t.customerId, sessionId: t.sessionId, notes: t.notes, operatedAt: iso(t.operatedAt)!,
+    productName: t.product?.name, operatorName: t.operator?.name, customerName: t.customer?.name ?? undefined,
+  }))
+}
+
+export type ProductVenueBreakdown = { venueId: string; venueName: string; saleCount: number; giftCount: number; giftRatio: number }
+export type ProductReconRow = {
+  productId: string; productName: string; unitPrice: number; currentStock: number; lowStockThreshold: number
+  isLowStock: boolean; saleCount: number; saleRevenue: number; giftCount: number; giftValue: number; giftRatio: number
+  byVenue: ProductVenueBreakdown[]; worstVenue: ProductVenueBreakdown | null; hasGiftAnomaly: boolean
+}
+
+/** 商品對帳（近 30 天販售/贈送、贈送比例異常）— 對齊 api.getProductReconciliation，scope 過濾。 */
+export async function getProductReconciliationForUserAsync(scope: UserScope): Promise<ProductReconRow[]> {
+  if (scope.role === 'none') return []
+  const cutoff = new Date(Date.now() - 29 * 86400000)
+  const venueNameById = new Map((await prisma.venue.findMany({ select: { id: true, name: true } })).map((v) => [v.id, v.name]))
+  const products = await prisma.product.findMany({ where: { isActive: true } })
+  const out: ProductReconRow[] = []
+  for (const p of products) {
+    const txs = await prisma.productTransaction.findMany({
+      where: { productId: p.id, operatedAt: { gte: cutoff }, ...venueWhere(scope.visibleVenueIds) },
+      select: { type: true, quantity: true, totalAmount: true, venueId: true },
+    })
+    const sales = txs.filter((t) => t.type === 'sale')
+    const gifts = txs.filter((t) => t.type === 'gift')
+    const saleCount = sales.reduce((s, t) => s + Math.abs(t.quantity), 0)
+    const saleRevenue = sales.reduce((s, t) => s + (t.totalAmount ?? 0), 0)
+    const giftCount = gifts.reduce((s, t) => s + Math.abs(t.quantity), 0)
+    const giftValue = giftCount * p.unitPrice
+    const total = saleCount + giftCount
+    const giftRatio = total > 0 ? giftCount / total : 0
+
+    const byVenueMap = new Map<string, { sale: number; gift: number }>()
+    for (const t of txs) {
+      const cur = byVenueMap.get(t.venueId) ?? { sale: 0, gift: 0 }
+      if (t.type === 'sale') cur.sale += Math.abs(t.quantity)
+      if (t.type === 'gift') cur.gift += Math.abs(t.quantity)
+      byVenueMap.set(t.venueId, cur)
+    }
+    const byVenue: ProductVenueBreakdown[] = []
+    for (const [vid, c] of byVenueMap) {
+      const t = c.sale + c.gift
+      byVenue.push({ venueId: vid, venueName: venueNameById.get(vid) ?? '?', saleCount: c.sale, giftCount: c.gift, giftRatio: t > 0 ? c.gift / t : 0 })
+    }
+    byVenue.sort((a, b) => b.giftRatio - a.giftRatio)
+    const worstVenue = byVenue.find((v) => v.saleCount + v.giftCount >= 5) ?? null
+    out.push({
+      productId: p.id, productName: p.name, unitPrice: p.unitPrice, currentStock: p.currentStock,
+      lowStockThreshold: p.lowStockThreshold, isLowStock: p.currentStock <= p.lowStockThreshold,
+      saleCount, saleRevenue, giftCount, giftValue, giftRatio, byVenue, worstVenue,
+      hasGiftAnomaly: worstVenue !== null && worstVenue.giftRatio > 0.3,
+    })
+  }
+  return out
+}
