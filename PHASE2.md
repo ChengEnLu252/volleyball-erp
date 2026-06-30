@@ -72,11 +72,16 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
 **🎉 P2.1 收款鏈全部完成**（a 收款 · b checkin · c 自助回報+確認入帳 · d 退費鏈 · e 場次對帳）。
 下一步：**P2.2 對帳 hub**（月記帳/報表/異常/無人場次/誠實商店；需補 `ledgerDay`、`boxAudit` 表）。
 
-### P2.2 對帳系統 hub
-- 月記帳 `reconciliation/ledger`(+`/review`)、報表匯出 `finance/payments`、財務報表 `finance`、
-  異常清單 `reconciliation/anomalies`、無人場次 `reconciliation/unattended`、誠實商店 `reconciliation/honest-shop`。
-- 讀取殼 + 記帳 upsert server action；異常改由 DB 計算。
-- 需補表：`ledgerDay`、`boxAudit`（誠實商店）。
+### P2.2 對帳系統 hub（拆小回合進行）
+順序：先做免新表的讀取殼 → 再做要新表的。
+- ✅ **P2.2a 無人場次對帳（已完成）**：`getUnattendedReportForUserAsync`（lookback 60 天無人場次、
+  自助回報 vs 實際入帳對照、信任落差、可疑客戶≥3 次未回報；各場內嵌 drill-down rows）；
+  `reconciliation/unattended` 改 server 殼 + `UnattendedClient`（dual-mode，collections 分頁走 store）。
+  提醒鈕 `sendSelfReportReminderAction` 為 **P2.5 placeholder**（通知管道未接）。build 綠 + 探針（lookback 內 7 場、86 筆自助回報）。
+- ⏳ **P2.2b 異常清單** `reconciliation/anomalies`（讀既有 `AnomalyAlert` 表，免新表）。
+- ⏳ **P2.2c 財務報表** `finance` + 報表匯出 `finance/payments`（Payment 彙總，免新表）。
+- ⏳ **P2.2d 月記帳** `reconciliation/ledger`(+`/review`)（**需新表 `ledgerDay`** + 記帳 upsert action）。
+- ⏳ **P2.2e 誠實商店** `reconciliation/honest-shop`（**需 `boxAudit`**，併 P2.4 商品做）。
 
 ### P2.3 薪資 / 績效
 - 工讀生時薪、管理職薪資（**`data/payroll.ts` 計算邏輯不動**，依《旭日管理規章》，只改吃 DB 資料）、

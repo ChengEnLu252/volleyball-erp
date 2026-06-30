@@ -1051,6 +1051,183 @@ export async function getSessionReconciliationForUserAsync(scope: UserScope, fil
   return filtered
 }
 
+// ── 無人場次自助回報對照（P2.2a）───────────────────────────────
+// 形狀對齊 data/api.ts 的 UnattendedReportOverview。實收 = sum(status='paid' Payment)。
+const UNATTENDED_LOOKBACK_DAYS = 60
+const SUSPICIOUS_UNREPORTED_THRESHOLD = 3
+
+export type UnattendedRegRow = {
+  registrationId: string
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+  registrationType: 'season_player' | 'season_substitute' | 'walk_in'
+  isPayable: boolean
+  expectedAmount: number
+  selfReportedPaid: boolean
+  selfPaymentMethod: 'cash' | 'transfer' | 'online' | null
+  selfPaymentEvidence: string | null
+  selfReportedAt: string | null
+  hasActualPayment: boolean
+  actualPaidAmount: number
+  reportedNoPay: boolean
+  paidNotReported: boolean
+}
+export type UnattendedSessionRow = {
+  sessionId: string
+  venueId: string
+  venueName: string
+  sessionDate: string
+  startTime: string
+  endTime: string
+  expectedRevenue: number
+  actualRevenue: number
+  registeredCount: number
+  seasonPlayerCount: number
+  payableCount: number
+  selfReportedCount: number
+  actualPaidCount: number
+  reportedButNoPayCount: number
+  paidButNotReportedCount: number
+  discrepancyAmount: number
+  selfReportRate: number
+  rows: UnattendedRegRow[]
+}
+export type SuspiciousCustomerRow = {
+  customerId: string
+  customerName: string
+  customerPhone: string | null
+  unattendedRegistrationsCount: number
+  selfReportedCount: number
+  unreportedCount: number
+  totalOwedFromUnreported: number
+  recentUnreportedDates: string[]
+  primaryVenueId: string
+  primaryVenueName: string
+}
+export type UnattendedReportBundle = {
+  sessions: UnattendedSessionRow[]
+  totalExpected: number
+  totalActual: number
+  totalDiscrepancy: number
+  overallSelfReportRate: number
+  trustGapCount: number
+  suspiciousCustomers: SuspiciousCustomerRow[]
+  lookbackDays: number
+  suspiciousThreshold: number
+  demoSessionId: string | null
+}
+
+export async function getUnattendedReportForUserAsync(scope: UserScope): Promise<UnattendedReportBundle> {
+  const empty: UnattendedReportBundle = { sessions: [], totalExpected: 0, totalActual: 0, totalDiscrepancy: 0, overallSelfReportRate: 0, trustGapCount: 0, suspiciousCustomers: [], lookbackDays: UNATTENDED_LOOKBACK_DAYS, suspiciousThreshold: SUSPICIOUS_UNREPORTED_THRESHOLD, demoSessionId: null }
+  if (scope.role === 'none') return empty
+
+  const today = new Date().toISOString().split('T')[0]
+  const cutoff = (() => { const d = new Date(today + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - UNATTENDED_LOOKBACK_DAYS); return d.toISOString().split('T')[0] })()
+
+  const sessionsRaw = await prisma.session.findMany({
+    where: { isUnattended: true, sessionDate: { gte: new Date(cutoff), lte: new Date(today) }, ...venueWhere(scope.visibleVenueIds) },
+    include: {
+      venue: { select: { name: true } },
+      registrations: {
+        where: { status: { not: 'cancelled' } },
+        include: {
+          customer: { select: { name: true, phone: true } },
+          payments: { where: { status: 'paid' }, select: { amount: true } },
+        },
+      },
+    },
+    orderBy: [{ sessionDate: 'desc' }, { startTime: 'desc' }],
+  })
+
+  const sessions: UnattendedSessionRow[] = sessionsRaw.map((s) => {
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const regs = s.registrations
+    let actualRevenue = 0, actualPaidCount = 0, reportedButNoPayCount = 0, paidButNotReportedCount = 0, selfReportedCount = 0
+    const rows: UnattendedRegRow[] = regs.map((r) => {
+      const isPayable = r.type !== 'season_player'
+      const paidAmount = r.payments.reduce((a, p) => a + p.amount, 0)
+      const hasPay = isPayable && r.payments.length > 0
+      if (isPayable) {
+        actualRevenue += paidAmount
+        if (hasPay) actualPaidCount++
+        if (r.selfReportedPaid && !hasPay) reportedButNoPayCount++
+        if (!r.selfReportedPaid && hasPay) paidButNotReportedCount++
+        if (r.selfReportedPaid) selfReportedCount++
+      }
+      return {
+        registrationId: r.id, customerId: r.customerId, customerName: r.customer.name, customerPhone: r.customer.phone,
+        registrationType: r.type as UnattendedRegRow['registrationType'],
+        isPayable, expectedAmount: isPayable ? fee : 0,
+        selfReportedPaid: r.selfReportedPaid, selfPaymentMethod: (r.selfPaymentMethod ?? null) as UnattendedRegRow['selfPaymentMethod'],
+        selfPaymentEvidence: r.selfPaymentEvidence, selfReportedAt: r.selfReportedAt ? r.selfReportedAt.toISOString() : null,
+        hasActualPayment: hasPay, actualPaidAmount: paidAmount,
+        reportedNoPay: r.selfReportedPaid && !hasPay && isPayable,
+        paidNotReported: !r.selfReportedPaid && hasPay && isPayable,
+      }
+    })
+    rows.sort((a, b) => (a.hasActualPayment !== b.hasActualPayment ? (a.hasActualPayment ? -1 : 1) : a.selfReportedPaid !== b.selfReportedPaid ? (a.selfReportedPaid ? -1 : 1) : a.customerName.localeCompare(b.customerName, 'zh-Hant')))
+    const payableCount = regs.filter((r) => r.type !== 'season_player').length
+    const seasonPlayerCount = regs.length - payableCount
+    const expectedRevenue = payableCount * fee
+    return {
+      sessionId: s.id, venueId: s.venueId, venueName: s.venue?.name ?? '?',
+      sessionDate: s.sessionDate.toISOString().split('T')[0], startTime: s.startTime, endTime: s.endTime,
+      expectedRevenue, actualRevenue, registeredCount: regs.length, seasonPlayerCount, payableCount,
+      selfReportedCount, actualPaidCount, reportedButNoPayCount, paidButNotReportedCount,
+      discrepancyAmount: expectedRevenue - actualRevenue, selfReportRate: payableCount > 0 ? selfReportedCount / payableCount : 0,
+      rows,
+    }
+  })
+
+  // 可疑客戶：lookback 內無人場次的「應付」報名，依客戶聚合，未回報次數 ≥ 門檻
+  const byCustomer = new Map<string, { name: string; phone: string | null; entries: { venueId: string; venueName: string; date: string; selfReported: boolean; owed: number }[] }>()
+  for (const s of sessionsRaw) {
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    for (const r of s.registrations) {
+      if (r.type === 'season_player') continue
+      let c = byCustomer.get(r.customerId)
+      if (!c) { c = { name: r.customer.name, phone: r.customer.phone, entries: [] }; byCustomer.set(r.customerId, c) }
+      c.entries.push({ venueId: s.venueId, venueName: s.venue?.name ?? '?', date: s.sessionDate.toISOString().split('T')[0], selfReported: r.selfReportedPaid, owed: fee })
+    }
+  }
+  const suspiciousCustomers: SuspiciousCustomerRow[] = []
+  for (const [customerId, c] of byCustomer) {
+    const unreported = c.entries.filter((e) => !e.selfReported)
+    if (unreported.length < SUSPICIOUS_UNREPORTED_THRESHOLD) continue
+    const venueCount = new Map<string, { name: string; n: number }>()
+    for (const e of c.entries) { const v = venueCount.get(e.venueId) ?? { name: e.venueName, n: 0 }; v.n++; venueCount.set(e.venueId, v) }
+    const primary = [...venueCount.entries()].sort((a, b) => b[1].n - a[1].n)[0]
+    suspiciousCustomers.push({
+      customerId, customerName: c.name, customerPhone: c.phone,
+      unattendedRegistrationsCount: c.entries.length, selfReportedCount: c.entries.length - unreported.length,
+      unreportedCount: unreported.length, totalOwedFromUnreported: unreported.reduce((a, e) => a + e.owed, 0),
+      recentUnreportedDates: unreported.map((e) => e.date).sort().reverse().slice(0, 5),
+      primaryVenueId: primary[0], primaryVenueName: primary[1].name,
+    })
+  }
+  suspiciousCustomers.sort((a, b) => b.unreportedCount - a.unreportedCount || b.totalOwedFromUnreported - a.totalOwedFromUnreported)
+
+  const totalExpected = sessions.reduce((a, s) => a + s.expectedRevenue, 0)
+  const totalActual = sessions.reduce((a, s) => a + s.actualRevenue, 0)
+  const totalPayable = sessions.reduce((a, s) => a + s.payableCount, 0)
+  const totalReported = sessions.reduce((a, s) => a + s.selfReportedCount, 0)
+  const trustGapCount = sessions.reduce((a, s) => a + s.reportedButNoPayCount, 0)
+
+  // demo self-checkin 連結：優先 lookback 內最近一場；否則任一無人場次
+  let demoSessionId: string | null = sessions[0]?.sessionId ?? null
+  if (!demoSessionId) {
+    const any = await prisma.session.findFirst({ where: { isUnattended: true, ...venueWhere(scope.visibleVenueIds) }, orderBy: { sessionDate: 'desc' }, select: { id: true } })
+    demoSessionId = any?.id ?? null
+  }
+
+  return {
+    sessions, totalExpected, totalActual, totalDiscrepancy: totalExpected - totalActual,
+    overallSelfReportRate: totalPayable > 0 ? totalReported / totalPayable : 0, trustGapCount,
+    suspiciousCustomers, lookbackDays: UNATTENDED_LOOKBACK_DAYS, suspiciousThreshold: SUSPICIOUS_UNREPORTED_THRESHOLD, demoSessionId,
+  }
+}
+
 // ── 季租單對帳（Round 9A）─────────────────────────────────────
 // 形狀對齊 data/api.ts 的 SeasonRentalReconciliation。
 export type SeasonRentalReconRow = {

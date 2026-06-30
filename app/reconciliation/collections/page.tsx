@@ -7,7 +7,8 @@ import SessionReconciliationPage from '@/app/reconciliation/sessions/SessionReco
 // 季租單分頁直接用 client 元件（store-mode）；標準路由 /reconciliation/season-rentals 才走 server 殼
 import SeasonRentalReconciliationPage from '@/app/reconciliation/season-rentals/SeasonRentalsClient'
 import ProductReconciliationPage from '@/app/reconciliation/products/page'
-import UnattendedReconciliationPage from '@/app/reconciliation/unattended/page'
+// 無人場次分頁直接用 client 元件（store-mode）；標準路由 /reconciliation/unattended 才走 server 殼
+import UnattendedReconciliationPage from '@/app/reconciliation/unattended/UnattendedClient'
 import HonestShopReconciliationPage from '@/app/reconciliation/honest-shop/page'
 
 export default function CollectionsReconciliationPage() {
