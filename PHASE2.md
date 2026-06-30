@@ -92,7 +92,15 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   頁面改 server 殼（傳 scope 過的球館）+ `PaymentsExportClient`（球館/起訖日篩選、空資料不下載）。
   授權：球館篩選 server 端再交叉 scope（不能匯他館）。商品流向報表停用、待 P2.4。
   build 綠 + 探針（近 7 日 144 場 / 1510 筆 Payment，venue/customer/收款人關聯皆解出）。
-- ⏳ **P2.2d 月記帳** `reconciliation/ledger`(+`/review`)（**需新表 `ledgerDay`** + 記帳 upsert action）。
+- ✅ **P2.2d 月記帳（已完成）**：新表 `ledger_days`（一館一天唯一，migration `20260630120000_ledger_days`）+
+  `AuditAction.UPSERT_LEDGER`。純邏輯（時段/衍生計算/對帳型別）抽到 `data/ledger-core.ts`（client+server 共用）；
+  `data/ledger.ts` re-export 之並保留 store 版對帳（仍供 `ledger-anomalies`）。server queries：`getLedgerDayAsync`/
+  `getLedgerMonthDaysAsync`/`getLedgerReviewAsync`（對帳系統側接真 DB：場地費↔已收 Payment、退款↔負額 Payment、
+  商品↔ProductTransaction 銷售；誠實商店/季打月分攤兩桶系統側暫 null，待 P2.2e/月結）。記帳 upsert =
+  `saveLedgerDayAction`（owner/manager + venue scope + AuditLog）。輸入/對帳頁改 server 殼 + `LedgerInputClient`/
+  `LedgerReviewClient`，**client 只 import server action（loadLedgerInputAction/loadLedgerReviewAction）自取資料**
+  → 不把 server-only 拖進 client bundle，故 `bookkeeping` 分頁 hub 可直接嵌入兩 client。
+  build 綠 + 探針（ledger_days 新表 0 列；對帳系統側 球魔方 2.0 2026-07：48 場/15 天、已收 $117,630）。
 - ⏳ **P2.2e 誠實商店** `reconciliation/honest-shop`（**需 `boxAudit`**，併 P2.4 商品做）。
 
 ### P2.3 薪資 / 績效

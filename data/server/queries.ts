@@ -24,7 +24,12 @@ import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
 import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
   SkillLevel, SessionStatus, SeasonRentalStatus,
+  LedgerDay, LedgerSlotValue,
 } from '@/types'
+import {
+  LEDGER_AC_RATE, computeLedgerDerived, weekdayOf, summarizeLedgerMonth, ledgerCell,
+  type LedgerMonthSummary, type LedgerDailyCompareRow, type LedgerCompareCell, type LedgerReconResult,
+} from '@/data/ledger-core'
 
 // 與 data/api.ts 的同名 filter 對齊（刻意內聯，避免從 api.ts import）
 export type SessionFilter = {
@@ -1730,4 +1735,143 @@ export async function buildReportTableAsync(
     .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
     .map((e) => [e.date, e.name, e.agg.sessions, e.agg.players, e.agg.revenue, e.agg.unpaid, e.agg.cash, e.agg.transfer, e.agg.online])
   return { filename: `收入明細_${tag}.csv`, headers: ['日期', '球館', '場次數', '出席人次', '已收金額', '未收金額', '現金', '轉帳', '線上'], rows }
+}
+
+// ── 月記帳（P2.2d）─────────────────────────────────────────────
+// ledger_days 落 DB；對帳（review）系統側現可對的接真資料：
+//   場地費 ↔ 已收 Payment（按場次日彙總）、退款 ↔ 負額 Payment、商品 ↔ ProductTransaction 銷售。
+//   誠實商店 / 季打月分攤兩個逐月桶系統側暫為 null（待 P2.2e / 月結整合），UI 顯示「系統無對應資料」不誤判。
+
+/** venueId 是否在使用者可見範圍（owner='all' 全可見） */
+function venueInScope(scope: UserScope, venueId: string): boolean {
+  return scope.visibleVenueIds === 'all' || scope.visibleVenueIds.includes(venueId)
+}
+
+/** Prisma ledger_days 列 → app LedgerDay 型別 */
+function mapLedgerDay(r: any): LedgerDay {
+  return {
+    venueId: r.venueId,
+    date: ymd(r.date),
+    slots: (r.slots ?? {}) as Record<string, LedgerSlotValue>,
+    merch: r.merch, snacks: r.snacks, drinks: r.drinks, ac: r.ac, other: r.other,
+    seasonFee: r.seasonFee, privatePrepay: r.privatePrepay, acFee: r.acFee, refund: r.refund,
+    acDegrees: r.acDegrees,
+    bookingNote: r.bookingNote, refundNote: r.refundNote, merchNote: r.merchNote,
+    reported: r.reported,
+    updatedBy: r.updatedBy, updatedAt: iso(r.updatedAt)!,
+  }
+}
+
+/** 某館某日記帳（無則 null）；venue 不在 scope → null */
+export async function getLedgerDayAsync(scope: UserScope, venueId: string, date: string): Promise<LedgerDay | null> {
+  if (!venueInScope(scope, venueId)) return null
+  const row = await prisma.ledgerDay.findUnique({ where: { venueId_date: { venueId, date: new Date(date) } } })
+  return row ? mapLedgerDay(row) : null
+}
+
+/** 某館某月所有已填日（排序）+ 月摘要；venue 不在 scope → 空 */
+export async function getLedgerMonthDaysAsync(
+  scope: UserScope, venueId: string, ym: string,
+): Promise<{ days: LedgerDay[]; summary: LedgerMonthSummary }> {
+  if (!venueInScope(scope, venueId)) return { days: [], summary: summarizeLedgerMonth(venueId, ym, []) }
+  const { gte, lt } = monthBounds(ym)
+  const rows = await prisma.ledgerDay.findMany({ where: { venueId, date: { gte, lt } }, orderBy: { date: 'asc' } })
+  const days = rows.map(mapLedgerDay)
+  return { days, summary: summarizeLedgerMonth(venueId, ym, days) }
+}
+
+/** ym('YYYY-MM') → [月初, 次月初) 的 Date 邊界（UTC） */
+function monthBounds(ym: string): { gte: Date; lt: Date } {
+  const [y, m] = ym.split('-').map(Number)
+  return { gte: new Date(Date.UTC(y, m - 1, 1)), lt: new Date(Date.UTC(y, m, 1)) }
+}
+
+/**
+ * 月記帳對帳（老闆視角，DB 版）。
+ * 逐日：場地費↔已收 Payment、商品↔ProductTransaction 銷售、退款↔負額 Payment。
+ * 逐月桶：誠實商店 / 季打 系統側暫 null（待後續子系統）。
+ * 只存不比：包場預付 / 冷氣費 / 冷氣度數 / 盤損 / 其他。
+ */
+export async function getLedgerReviewAsync(scope: UserScope, venueId: string, ym: string): Promise<LedgerReconResult | null> {
+  if (!venueInScope(scope, venueId)) return null
+  const venue = await prisma.venue.findUnique({ where: { id: venueId }, select: { name: true } })
+  const venueName = venue?.name ?? '?'
+  const { gte, lt } = monthBounds(ym)
+
+  const { days } = await getLedgerMonthDaysAsync(scope, venueId, ym)
+  const byDate = new Map(days.map((d) => [d.date, d]))
+
+  // 系統側：場次當日已收 / 退款（按場次日彙總）
+  const sessions = await prisma.session.findMany({
+    where: { venueId, sessionDate: { gte, lt } },
+    select: { sessionDate: true, registrations: { select: { payments: { select: { amount: true, status: true } } } } },
+  })
+  const courtSys = new Map<string, number>()
+  const refundSys = new Map<string, number>()
+  for (const s of sessions) {
+    const date = ymd(s.sessionDate)
+    let paid = 0, refunded = 0
+    for (const r of s.registrations) for (const p of r.payments) {
+      if (p.status === 'paid' && p.amount > 0) paid += p.amount
+      else if (p.amount < 0) refunded += Math.abs(p.amount)
+    }
+    if (paid) courtSys.set(date, (courtSys.get(date) ?? 0) + paid)
+    if (refunded) refundSys.set(date, (refundSys.get(date) ?? 0) + refunded)
+  }
+
+  // 系統側：商品銷售（ProductTransaction sale，按操作日彙總）
+  const merchSys = new Map<string, number>()
+  const txs = await prisma.productTransaction.findMany({
+    where: { venueId, type: 'sale', operatedAt: { gte, lt } },
+    select: { operatedAt: true, totalAmount: true },
+  })
+  for (const t of txs) {
+    const date = ymd(t.operatedAt)
+    merchSys.set(date, (merchSys.get(date) ?? 0) + (t.totalAmount ?? 0))
+  }
+
+  // 逐日列（館長有填 或 系統有資料 的日子）
+  const relevantDates = new Set<string>([...byDate.keys(), ...courtSys.keys(), ...merchSys.keys(), ...refundSys.keys()])
+  const daily: LedgerDailyCompareRow[] = [...relevantDates].sort((a, b) => a.localeCompare(b)).map((date) => {
+    const d = byDate.get(date)
+    const dv = d ? computeLedgerDerived(d) : null
+    return {
+      date, weekday: weekdayOf(date),
+      reported: d?.reported ?? false, hasLedger: !!d,
+      court: ledgerCell(dv?.courtTotal ?? 0, courtSys.get(date) ?? 0),
+      merch: ledgerCell(d?.merch ?? 0, merchSys.get(date) ?? 0),
+      refund: ledgerCell(d?.refund ?? 0, refundSys.get(date) ?? 0),
+    }
+  })
+
+  // 逐月桶：系統側待後續 → null
+  const drinksSnacks = days.reduce((s, d) => s + d.drinks + d.snacks, 0)
+  const seasonLedger = days.reduce((s, d) => s + d.seasonFee, 0)
+  const monthly = [
+    { key: 'honestShop' as const, label: '飲料 + 零食（誠實商店）', ledger: drinksSnacks, system: null, diff: null },
+    { key: 'season' as const,     label: '季打收費（季租實收）',   ledger: seasonLedger, system: null, diff: null },
+  ]
+
+  const acFeeSum = days.reduce((s, d) => s + d.acFee, 0)
+  const acDegSum = days.reduce((s, d) => s + d.acDegrees, 0)
+  const acEstSum = acDegSum * LEDGER_AC_RATE
+  const storeOnly = {
+    privatePrepay: days.reduce((s, d) => s + d.privatePrepay, 0),
+    acFee: acFeeSum, acDegrees: acDegSum, acEstimate: acEstSum,
+    acLoss: acFeeSum - acEstSum,
+    other: days.reduce((s, d) => s + d.other, 0),
+  }
+
+  const sum = (sel: (r: LedgerDailyCompareRow) => LedgerCompareCell) => {
+    let l = 0, s = 0
+    for (const row of daily) { l += sel(row).ledger; s += sel(row).system ?? 0 }
+    return ledgerCell(l, s)
+  }
+  const flaggedCells = daily.reduce((n, r) => n + [r.court, r.merch, r.refund].filter((c) => c.diff !== null && c.diff !== 0).length, 0)
+
+  return {
+    venueId, venueName, ym, rate: LEDGER_AC_RATE,
+    daily, monthly, storeOnly, empty: days.length === 0,
+    totals: { court: sum((r) => r.court), merch: sum((r) => r.merch), refund: sum((r) => r.refund), flaggedCells },
+  }
 }

@@ -45,6 +45,7 @@ model Venue {
   products            Product[]
   productTransactions ProductTransaction[]
   anomalyAlerts       AnomalyAlert[]
+  ledgerDays          LedgerDay[]
 
   @@map("venues")
 }
@@ -74,6 +75,7 @@ model User {
   recordedPayments    Payment[]
   productTransactions ProductTransaction[]
   auditLogs           AuditLog[]
+  ledgerDays          LedgerDay[]
 
   @@map("users")
 }
@@ -566,6 +568,8 @@ enum AuditAction {
   // P2.1d 新增：退費鏈
   ISSUE_REFUND
   WAIVE_REFUND
+  // P2.2d 新增：月記帳
+  UPSERT_LEDGER
 }
 
 
@@ -597,4 +601,51 @@ enum AlertType {
 enum AlertSeverity {
   warning
   critical
+}
+
+
+// ── 月記帳（P2.2d）─────────────────────────────────────────────
+// 對應對方 Excel「多爾森記帳表」：館長每日記帳，一館一天一筆。
+// slots = 各時段場地費（金額或「包場/季租」字串註記）；其餘為當日各類銷售/收費。
+// 老闆對帳（review）把這些數字與系統既有資料（Payment/ProductTransaction）比差異。
+
+model LedgerDay {
+  id            String   @id @default(uuid())
+  venueId       String   @map("venue_id")
+  /// 記帳日（一館一天唯一）
+  date          DateTime @db.Date
+  /// 各時段場地費：key=時段 key（見 data/ledger-core LEDGER_SLOTS），value=金額(number) 或 註記(string)
+  slots         Json     @default("{}")
+
+  // ── 銷售類別 ──
+  merch         Int      @default(0)
+  snacks        Int      @default(0)
+  drinks        Int      @default(0)
+  ac            Int      @default(0)
+  other         Int      @default(0)
+
+  // ── 收費 / 退款 ──
+  seasonFee     Int      @default(0) @map("season_fee")
+  privatePrepay Int      @default(0) @map("private_prepay")
+  acFee         Int      @default(0) @map("ac_fee")
+  refund        Int      @default(0)
+
+  // ── 冷氣度數（試算 = 度數 × 單價）──
+  acDegrees     Int      @default(0) @map("ac_degrees")
+
+  // ── 文字明細 ──
+  bookingNote   String   @default("") @map("booking_note")
+  refundNote    String   @default("") @map("refund_note")
+  merchNote     String   @default("") @map("merch_note")
+
+  reported      Boolean  @default(false)
+  updatedBy     String   @map("updated_by")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  venue   Venue @relation(fields: [venueId], references: [id])
+  updater User  @relation(fields: [updatedBy], references: [id])
+
+  @@unique([venueId, date])
+  @@index([venueId, date])
+  @@map("ledger_days")
 }
