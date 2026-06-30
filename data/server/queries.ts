@@ -2139,3 +2139,66 @@ export async function getProductReconciliationForUserAsync(scope: UserScope): Pr
   }
   return out
 }
+
+// ── 對外報名站台讀取（公開，無 auth）─────────────────────────────
+// 取代 data/api 的 listBookingDatesWithSessions / listSessionsByVenueAndDate / getPublicSession
+// （原讀記憶體 GENERATED）→ 改查真 DB，讓「館長在 ERP 增減場次 → 對外站台即時反映、名額即時準」。
+// 只露出公開可報名場次：非主揪場（seasonRentalId=null）、非取消。
+
+type PublicSessionShape = import('@/data/api').PublicSession
+
+function toPublicSessionDb(s: any, currentCount: number): PublicSessionShape {
+  let status: PublicSessionShape['status']
+  if (s.status === 'cancelled') status = 'cancelled'
+  else if (currentCount >= s.maxCapacity) status = 'full'
+  else status = 'open'
+  return {
+    id: s.id, venueId: s.venueId, sessionDate: ymd(s.sessionDate),
+    startTime: s.startTime, endTime: s.endTime, sessionType: s.sessionType, netHeight: s.netHeight,
+    courtFee: s.courtFee, acFee: s.acFee, acEnabled: s.acEnabled, hasAircon: s.acFee > 0,
+    maxCapacity: s.maxCapacity, currentCount,
+    minSkillRequired: fromSkill(s.minSkillRequired), maxSkillAllowed: fromSkill(s.maxSkillAllowed),
+    status, notes: s.notes, court: s.court,
+  }
+}
+
+/** 某館「未來 N 天」每日可報名概況（日期 → 場數/可報名場數/剩餘名額）。 */
+export async function getBookingDatesWithSessionsAsync(
+  venueId: string, fromDate: string, days: number,
+): Promise<Array<{ date: string; sessionCount: number; openSessionCount: number; remainingSeats: number }>> {
+  const toDate = new Date(new Date(fromDate + 'T00:00:00Z').getTime() + days * 86400000)
+  const rows = await prisma.session.findMany({
+    where: { venueId, seasonRentalId: null, status: { not: 'cancelled' }, sessionDate: { gte: new Date(fromDate), lte: toDate } },
+    select: { sessionDate: true, maxCapacity: true, _count: { select: { registrations: { where: { status: { not: 'cancelled' } } } } } },
+  })
+  const byDate = new Map<string, { sessionCount: number; openSessionCount: number; remainingSeats: number }>()
+  for (const s of rows) {
+    const date = ymd(s.sessionDate)
+    const remaining = Math.max(0, s.maxCapacity - s._count.registrations)
+    const e = byDate.get(date) ?? { sessionCount: 0, openSessionCount: 0, remainingSeats: 0 }
+    e.sessionCount += 1
+    if (remaining > 0) e.openSessionCount += 1
+    e.remainingSeats += remaining
+    byDate.set(date, e)
+  }
+  return [...byDate.entries()].map(([date, info]) => ({ date, ...info })).sort((a, b) => a.date.localeCompare(b.date))
+}
+
+/** 某館某日的公開場次（含即時名額）。 */
+export async function getBookingSessionsByDateAsync(venueId: string, date: string): Promise<PublicSessionShape[]> {
+  const rows = await prisma.session.findMany({
+    where: { venueId, sessionDate: new Date(date), seasonRentalId: null, status: { not: 'cancelled' } },
+    select: { id: true, venueId: true, sessionDate: true, startTime: true, endTime: true, sessionType: true, netHeight: true, courtFee: true, acFee: true, acEnabled: true, maxCapacity: true, minSkillRequired: true, maxSkillAllowed: true, status: true, notes: true, court: true, _count: { select: { registrations: { where: { status: { not: 'cancelled' } } } } } },
+    orderBy: { startTime: 'asc' },
+  })
+  return rows.map((s) => toPublicSessionDb(s, s._count.registrations))
+}
+
+/** 單一公開場次（報名明細頁）；找不到回 null。 */
+export async function getPublicSessionAsync(sessionId: string): Promise<PublicSessionShape | null> {
+  const s = await prisma.session.findUnique({
+    where: { id: sessionId },
+    select: { id: true, venueId: true, sessionDate: true, startTime: true, endTime: true, sessionType: true, netHeight: true, courtFee: true, acFee: true, acEnabled: true, maxCapacity: true, minSkillRequired: true, maxSkillAllowed: true, status: true, notes: true, court: true, _count: { select: { registrations: { where: { status: { not: 'cancelled' } } } } } },
+  })
+  return s ? toPublicSessionDb(s, s._count.registrations) : null
+}

@@ -15,6 +15,24 @@
 import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import type { Gender, SkillLevel } from '@/types'
+import {
+  getBookingDatesWithSessionsAsync, getBookingSessionsByDateAsync, getPublicSessionAsync,
+} from '@/data/server/queries'
+import type { PublicSession } from '@/data/api'
+
+// ── 公開讀取（對外站台改查真 DB，讓館長增減場次即時反映、名額即時準）──
+/** 某館未來 N 天每日可報名概況 */
+export async function getBookingDatesAction(venueId: string, fromDate: string, days: number) {
+  return getBookingDatesWithSessionsAsync(venueId, fromDate, days)
+}
+/** 某館某日公開場次（含即時名額） */
+export async function getBookingSessionsAction(venueId: string, date: string): Promise<PublicSession[]> {
+  return getBookingSessionsByDateAsync(venueId, date)
+}
+/** 單一公開場次（報名明細頁） */
+export async function getPublicSessionAction(sessionId: string): Promise<PublicSession | null> {
+  return getPublicSessionAsync(sessionId)
+}
 
 // app SkillLevel(B+/A+/S*) → Prisma enum 名稱(B_PLUS…)
 const SKILL_TO_PRISMA: Record<string, string> = { 'B+': 'B_PLUS', 'A+': 'A_PLUS', 'S*': 'S_STAR' }

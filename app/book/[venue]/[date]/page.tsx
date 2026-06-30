@@ -11,10 +11,11 @@
 //   3. LoginGate 包住場次列表（時間軸 layout）
 // ============================================================
 
-import { use, useMemo } from 'react'
+import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { getVenueBySlug, listSessionsByVenueAndDate } from '@/data/api'
+import { getVenueBySlug, type PublicSession } from '@/data/api'
+import { getBookingSessionsAction } from '@/app/actions/registrations'
 import BookingShell from '@/components/booking/BookingShell'
 import SessionCard from '@/components/booking/SessionCard'
 import LoginGate from '@/components/booking/LoginGate'
@@ -45,10 +46,14 @@ export default function DayBookPage({ params }: {
   if (!venueInfo) notFound()
   if (!isValidDate(date)) notFound()
 
-  const sessions = useMemo(
-    () => listSessionsByVenueAndDate(venueInfo.id, date),
-    [venueInfo.id, date],
-  )
+  // P-booking-read：對外站台改查真 DB（即時名額）
+  const venueDbId = venueInfo.id
+  const [sessions, setSessions] = useState<PublicSession[]>([])
+  useEffect(() => {
+    let alive = true
+    getBookingSessionsAction(venueDbId, date).then((s) => { if (alive) setSessions(s) })
+    return () => { alive = false }
+  }, [venueDbId, date])
   const { main, sub } = formatDateChinese(date)
 
   return (

@@ -16,9 +16,8 @@
 import { use, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { notFound } from 'next/navigation'
-import {
-  getVenueBySlug, getPublicSession,
-} from '@/data/api'
+import { getVenueBySlug, type PublicSession } from '@/data/api'
+import { getPublicSessionAction } from '@/app/actions/registrations'
 import BookingShell from '@/components/booking/BookingShell'
 import LineLoginModal, {
   getLineUser, clearLineUser, type LineUser,
@@ -74,11 +73,16 @@ export default function SessionDetailPage({ params, searchParams }: {
 
   const venueInfo = getVenueBySlug(venue)
   if (!venueInfo) notFound()
-  const session = getPublicSession(sessionId)
-  if (!session) notFound()
-  if (session.sessionDate !== date) notFound()
 
   const router = useRouter()
+
+  // P-booking-read：場次明細改查真 DB（undefined=載入中、null=不存在）
+  const [session, setSession] = useState<PublicSession | null | undefined>(undefined)
+  useEffect(() => {
+    let alive = true
+    getPublicSessionAction(sessionId).then((s) => { if (alive) setSession(s) })
+    return () => { alive = false }
+  }, [sessionId])
 
   // LINE 登入狀態
   const [lineUser, setLineUserState] = useState<LineUser | null>(null)
@@ -102,6 +106,12 @@ export default function SessionDetailPage({ params, searchParams }: {
   const [submitting, setSubmitting] = useState(false)
   // 手機重複 → 三選一對話框
   const [dupExisting, setDupExisting] = useState<ExistingCustomer[] | null>(null)
+
+  // 場次載入中 / 不存在（改查 DB 後）
+  if (session === undefined) {
+    return <div style={{ padding: 48, textAlign: 'center', color: BOOKING_COLORS.textMuted, fontSize: 14 }}>載入場次中…</div>
+  }
+  if (!session || session.sessionDate !== date) notFound()
 
   const typeStyle = SESSION_TYPE_TAG_COLOR[session.sessionType] ?? { bg: BOOKING_COLORS.bgSecondary, text: BOOKING_COLORS.textSecondary }
   const totalPrice = session.courtFee + (session.hasAircon ? session.acFee : 0)

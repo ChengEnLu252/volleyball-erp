@@ -12,9 +12,10 @@
 //   4. Footer（BookingShell 內建：LINE 官方 CTA + 地址）
 // ============================================================
 
-import { use, useMemo } from 'react'
+import { use, useEffect, useMemo, useState } from 'react'
 import { notFound } from 'next/navigation'
-import { getVenueBySlug, listBookingDatesWithSessions } from '@/data/api'
+import { getVenueBySlug } from '@/data/api'
+import { getBookingDatesAction } from '@/app/actions/registrations'
 import BookingShell from '@/components/booking/BookingShell'
 import BookingCalendar from '@/components/booking/BookingCalendar'
 import RulesSection from '@/components/booking/RulesSection'
@@ -38,10 +39,14 @@ export default function VenueBookHome({ params }: { params: Promise<{ venue: str
 
   const todayStr = today()
 
-  const dates = useMemo(
-    () => listBookingDatesWithSessions(venueInfo.id, todayStr, BOOKING_HORIZON_DAYS),
-    [venueInfo.id, todayStr],
-  )
+  // P-booking-read：對外站台改查真 DB（館長增減場次即時反映、名額即時準）
+  const venueDbId = venueInfo.id
+  const [dates, setDates] = useState<Array<{ date: string; sessionCount: number; openSessionCount: number; remainingSeats: number }>>([])
+  useEffect(() => {
+    let alive = true
+    getBookingDatesAction(venueDbId, todayStr, BOOKING_HORIZON_DAYS).then((d) => { if (alive) setDates(d) })
+    return () => { alive = false }
+  }, [venueDbId, todayStr])
 
   const totalSessions = dates.reduce((s, d) => s + d.sessionCount, 0)
   const totalOpenSessions = dates.reduce((s, d) => s + d.openSessionCount, 0)
