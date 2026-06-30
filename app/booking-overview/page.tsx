@@ -18,15 +18,10 @@
 // 視覺維持 ERP 配色（奶白 + 白卡），不走粉色 — 粉色是客戶端報名頁專用。
 // ============================================================
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
-import {
-  listVenues, getCurrentVisibleVenueIds,
-  getVenueBookingOverview,
-  type PublicSession,
-} from '@/data/api'
-import { useStoreSync } from '@/data/store'
-import type { Venue } from '@/types'
+import type { PublicSession } from '@/data/api'
+import { loadBookingOverviewAction, type BookingOverviewBundle } from '@/app/actions/booking-overview'
 
 const SESSION_TYPE_LABEL: Record<string, string> = {
   male_only: '男純', male_mixed: '男混', male_position: '男專位',
@@ -60,35 +55,18 @@ function formatDate(dateStr: string): { md: string; dow: string; isToday: boolea
 }
 
 export default function BookingOverviewPage() {
-  const storeVersion = useStoreSync()
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
+  // P-booking-read：熱度看板改查真 DB（client 自取 server action，已 scope）
+  const [bundle, setBundle] = useState<BookingOverviewBundle | null>(null)
+  function load(venueId?: string) {
+    loadBookingOverviewAction({ venueId }).then(setBundle)
+  }
+  useEffect(() => { load() }, [])
 
-  // 視角可見館
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const visible = useMemo(() => mounted ? getCurrentVisibleVenueIds() : 'all', [mounted, storeVersion])
-
-  const allVenues = useMemo(() => listVenues(), [])
-  const venues: Venue[] = useMemo(() => {
-    if (visible === 'all') return allVenues
-    return allVenues.filter(v => visible.includes(v.id))
-  }, [allVenues, visible])
-
-  // 選中館 — 預設第一個
-  const [selectedVenueId, setSelectedVenueId] = useState<string | null>(null)
-  useEffect(() => {
-    if (!selectedVenueId && venues.length > 0) {
-      setSelectedVenueId(venues[0]!.id)
-    } else if (selectedVenueId && !venues.find(v => v.id === selectedVenueId)) {
-      setSelectedVenueId(venues[0]?.id ?? null)
-    }
-  }, [venues, selectedVenueId])
-
-  const overview = useMemo(() => {
-    if (!selectedVenueId) return null
-    return getVenueBookingOverview(selectedVenueId, 14)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedVenueId, storeVersion])
+  const ok = bundle?.ok ? bundle : null
+  const venues = ok?.venues ?? []
+  const selectedVenueId = ok?.venueId ?? null
+  const setSelectedVenueId = (id: string) => load(id)
+  const overview = ok?.overview ?? null
 
   const overallFillPct = overview && overview.totalCapacity > 0
     ? Math.round((overview.totalRegistrations / overview.totalCapacity) * 100)

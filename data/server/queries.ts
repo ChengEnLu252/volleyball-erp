@@ -2202,3 +2202,31 @@ export async function getPublicSessionAsync(sessionId: string): Promise<PublicSe
   })
   return s ? toPublicSessionDb(s, s._count.registrations) : null
 }
+
+/** 報名熱度看板：某館未來 N 天場次（依日分組，含即時名額）+ 總計。讀真 DB。 */
+export async function getBookingOverviewAsync(venueId: string, days = 14): Promise<{
+  totalSessions: number; totalRegistrations: number; totalRemainingSeats: number; totalCapacity: number
+  byDate: Array<{ date: string; sessions: PublicSessionShape[] }>
+}> {
+  const today = new Date().toISOString().slice(0, 10)
+  const toDate = new Date(new Date(today + 'T00:00:00Z').getTime() + days * 86400000)
+  const rows = await prisma.session.findMany({
+    where: { venueId, seasonRentalId: null, status: { not: 'cancelled' }, sessionDate: { gte: new Date(today), lte: toDate } },
+    select: { id: true, venueId: true, sessionDate: true, startTime: true, endTime: true, sessionType: true, netHeight: true, courtFee: true, acFee: true, acEnabled: true, maxCapacity: true, minSkillRequired: true, maxSkillAllowed: true, status: true, notes: true, court: true, _count: { select: { registrations: { where: { status: { not: 'cancelled' } } } } } },
+    orderBy: [{ sessionDate: 'asc' }, { startTime: 'asc' }],
+  })
+  let totalRegistrations = 0, totalCapacity = 0
+  const byDateMap = new Map<string, PublicSessionShape[]>()
+  for (const s of rows) {
+    const ps = toPublicSessionDb(s, s._count.registrations)
+    totalRegistrations += ps.currentCount
+    totalCapacity += ps.maxCapacity
+    const arr = byDateMap.get(ps.sessionDate) ?? []
+    arr.push(ps); byDateMap.set(ps.sessionDate, arr)
+  }
+  return {
+    totalSessions: rows.length, totalRegistrations,
+    totalRemainingSeats: Math.max(0, totalCapacity - totalRegistrations), totalCapacity,
+    byDate: [...byDateMap.entries()].map(([date, sessions]) => ({ date, sessions })),
+  }
+}
