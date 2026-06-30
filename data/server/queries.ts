@@ -1228,6 +1228,73 @@ export async function getUnattendedReportForUserAsync(scope: UserScope): Promise
   }
 }
 
+// ── 財務報表（P2.2c）───────────────────────────────────────────
+// 取代 finance 頁原本寫死的週收入/付款分佈/KPI：全部由真 Payment（status='paid'）即時彙總。
+export type FinancePeriod = 'today' | 'week' | 'month'
+export type FinanceReportBundle = {
+  period: FinancePeriod
+  rangeFrom: string
+  rangeTo: string
+  totalRevenue: number
+  totalPlayers: number
+  totalSessions: number
+  avgDailyRevenue: number
+  days: { date: string; revenue: number; players: number }[]
+  paymentBreakdown: { method: 'cash' | 'transfer' | 'online'; amount: number; ratio: number }[]
+  venueSummaries: { venueId: string; venueName: string; totalRevenue: number; totalPlayers: number; totalSessions: number; unpaidAmount: number }[]
+}
+
+export async function getFinanceReportForUserAsync(scope: UserScope, period: FinancePeriod = 'week'): Promise<FinanceReportBundle> {
+  const today = new Date().toISOString().split('T')[0]
+  const addDays = (d: string, n: number) => { const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().split('T')[0] }
+  const rangeFrom = period === 'today' ? today : period === 'week' ? addDays(today, -6) : addDays(today, -29)
+  const empty: FinanceReportBundle = { period, rangeFrom, rangeTo: today, totalRevenue: 0, totalPlayers: 0, totalSessions: 0, avgDailyRevenue: 0, days: [], paymentBreakdown: [], venueSummaries: [] }
+  if (scope.role === 'none') return empty
+
+  const sessions = await prisma.session.findMany({
+    where: { sessionDate: { gte: new Date(rangeFrom), lte: new Date(today) }, status: { not: 'cancelled' }, ...venueWhere(scope.visibleVenueIds) },
+    include: {
+      venue: { select: { name: true } },
+      registrations: { where: { status: { not: 'cancelled' } }, select: { type: true, payments: { where: { status: 'paid' }, select: { amount: true, method: true } } } },
+    },
+  })
+
+  const byDate = new Map<string, { revenue: number; players: number }>()
+  const byVenue = new Map<string, { name: string; revenue: number; players: number; sessions: number; unpaid: number }>()
+  const method = { cash: 0, transfer: 0, online: 0 }
+
+  for (const s of sessions) {
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    const date = s.sessionDate.toISOString().split('T')[0]
+    let sessRevenue = 0, unpaid = 0
+    for (const r of s.registrations) {
+      const paid = r.payments.reduce((a, p) => a + p.amount, 0)
+      sessRevenue += paid
+      for (const p of r.payments) { if (p.method === 'cash' || p.method === 'transfer' || p.method === 'online') method[p.method] += p.amount }
+      if (r.type !== 'season_player' && r.payments.length === 0) unpaid += fee
+    }
+    const players = s.registrations.length
+    const dd = byDate.get(date) ?? { revenue: 0, players: 0 }; dd.revenue += sessRevenue; dd.players += players; byDate.set(date, dd)
+    const vv = byVenue.get(s.venueId) ?? { name: s.venue?.name ?? '?', revenue: 0, players: 0, sessions: 0, unpaid: 0 }
+    vv.revenue += sessRevenue; vv.players += players; vv.sessions += 1; vv.unpaid += unpaid; byVenue.set(s.venueId, vv)
+  }
+
+  const days: FinanceReportBundle['days'] = []
+  for (let d = rangeFrom; d <= today; d = addDays(d, 1)) {
+    const x = byDate.get(d) ?? { revenue: 0, players: 0 }
+    days.push({ date: d, revenue: x.revenue, players: x.players })
+  }
+
+  const totalRevenue = days.reduce((a, d) => a + d.revenue, 0)
+  const totalPlayers = days.reduce((a, d) => a + d.players, 0)
+  const totalSessions = sessions.length
+  const methodTotal = method.cash + method.transfer + method.online
+  const paymentBreakdown = (['cash', 'transfer', 'online'] as const).map((m) => ({ method: m, amount: method[m], ratio: methodTotal > 0 ? Math.round((method[m] / methodTotal) * 100) : 0 }))
+  const venueSummaries = [...byVenue.entries()].map(([venueId, v]) => ({ venueId, venueName: v.name, totalRevenue: v.revenue, totalPlayers: v.players, totalSessions: v.sessions, unpaidAmount: v.unpaid })).sort((a, b) => b.totalRevenue - a.totalRevenue)
+
+  return { period, rangeFrom, rangeTo: today, totalRevenue, totalPlayers, totalSessions, avgDailyRevenue: days.length ? Math.round(totalRevenue / days.length) : 0, days, paymentBreakdown, venueSummaries }
+}
+
 // ── 異常清單（P2.2b）───────────────────────────────────────────
 // 形狀對齊 data/api.ts 的 ReconciliationAnomaly。目前由已遷 DB 資料產生 3 類：
 //   rental_unpaid（季租未繳齊）、session_shortfall（近 7 天場次少收 ≥$200）、
