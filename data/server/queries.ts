@@ -1592,3 +1592,142 @@ export async function getCaptainPortalByTokenAsync(token: string): Promise<Capta
     sessions,
   }
 }
+
+// ── 報表匯出（P2.2c2）─────────────────────────────────────────
+// 由真 DB 產生 CSV 用的表格資料（headers + rows），scope + 日期區間 + 球館篩選。
+// 商品流向（product）待 P2.4 商品模組遷移後補。
+export type ReportType = 'revenue_daily' | 'venue_summary' | 'payment' | 'customer'
+export type ReportTable = { filename: string; headers: string[]; rows: (string | number)[][] }
+
+const METHOD_ZH: Record<string, string> = { cash: '現金', transfer: '轉帳', online: '線上' }
+const PAYSTATUS_ZH: Record<string, string> = { paid: '已付', partial: '部分', refunded: '已退', unpaid: '未付' }
+
+/** filter 球館 + scope → 實際可查 venue 集合（fail-closed） */
+function resolveExportVenues(scope: UserScope, venueId: string): string[] | 'all' {
+  if (venueId === 'all') return scope.visibleVenueIds
+  if (scope.visibleVenueIds === 'all' || scope.visibleVenueIds.includes(venueId)) return [venueId]
+  return ['__none__']
+}
+
+export async function buildReportTableAsync(
+  scope: UserScope,
+  type: ReportType,
+  venueId: string,
+  from: string,
+  to: string,
+): Promise<ReportTable> {
+  const visible = resolveExportVenues(scope, venueId)
+  const tag = `${from}_${to}`
+  const dateRange = { gte: new Date(from + 'T00:00:00Z'), lte: new Date(to + 'T23:59:59Z') }
+
+  if (scope.role === 'none') return { filename: `report_${tag}.csv`, headers: [], rows: [] }
+
+  // ── 付款明細：每筆 Payment 一列 ──────────────────────────────
+  if (type === 'payment') {
+    const payments = await prisma.payment.findMany({
+      where: { registration: { session: { sessionDate: dateRange, ...venueWhere(visible) } } },
+      include: {
+        operator: { select: { name: true } },
+        registration: {
+          select: {
+            customer: { select: { name: true, phone: true } },
+            session: { select: { sessionDate: true, startTime: true, endTime: true, venue: { select: { name: true } } } },
+          },
+        },
+      },
+      orderBy: { paidAt: 'asc' },
+    })
+    return {
+      filename: `付款明細_${tag}.csv`,
+      headers: ['收款時間', '球館', '場次日期', '時段', '客戶', '電話', '金額', '付款方式', '狀態', '收款人', '備註'],
+      rows: payments.map((p) => {
+        const s = p.registration.session
+        return [
+          iso(p.paidAt)!.slice(0, 16).replace('T', ' '),
+          s.venue?.name ?? '',
+          ymd(s.sessionDate),
+          `${s.startTime}-${s.endTime}`,
+          p.registration.customer?.name ?? '',
+          p.registration.customer?.phone ?? '',
+          p.amount,
+          METHOD_ZH[p.method] ?? p.method,
+          PAYSTATUS_ZH[p.status] ?? p.status,
+          p.operator?.name ?? '',
+          p.notes ?? '',
+        ]
+      }),
+    }
+  }
+
+  // ── 客戶消費：每位客戶累計 ──────────────────────────────────
+  if (type === 'customer') {
+    const regs = await prisma.registration.findMany({
+      where: { status: { not: 'cancelled' }, session: { sessionDate: dateRange, ...venueWhere(visible) } },
+      select: {
+        customer: { select: { id: true, name: true, phone: true } },
+        payments: { where: { status: 'paid' }, select: { amount: true } },
+      },
+    })
+    const byCust = new Map<string, { name: string; phone: string; sessions: number; spent: number }>()
+    for (const r of regs) {
+      const c = r.customer
+      const cur = byCust.get(c.id) ?? { name: c.name, phone: c.phone ?? '', sessions: 0, spent: 0 }
+      cur.sessions += 1
+      cur.spent += r.payments.reduce((a, p) => a + p.amount, 0)
+      byCust.set(c.id, cur)
+    }
+    const rows = [...byCust.values()].sort((a, b) => b.spent - a.spent).map((c) => [c.name, c.phone, c.sessions, c.spent])
+    return { filename: `客戶消費_${tag}.csv`, headers: ['客戶', '電話', '場次數', '累計消費'], rows }
+  }
+
+  // ── 收入（revenue_daily / venue_summary）：共用 session 彙總 ──
+  const sessions = await prisma.session.findMany({
+    where: { sessionDate: dateRange, status: { not: 'cancelled' }, ...venueWhere(visible) },
+    include: {
+      venue: { select: { name: true } },
+      registrations: { where: { status: { not: 'cancelled' } }, select: { type: true, payments: { where: { status: 'paid' }, select: { amount: true, method: true } } } },
+    },
+  })
+
+  type Agg = { sessions: number; players: number; revenue: number; unpaid: number; cash: number; transfer: number; online: number }
+  const blank = (): Agg => ({ sessions: 0, players: 0, revenue: 0, unpaid: 0, cash: 0, transfer: 0, online: 0 })
+  const acc = (a: Agg, s: typeof sessions[number]) => {
+    const fee = s.courtFee + (s.acEnabled ? s.acFee : 0)
+    a.sessions += 1
+    a.players += s.registrations.length
+    for (const r of s.registrations) {
+      const paid = r.payments.reduce((x, p) => x + p.amount, 0)
+      a.revenue += paid
+      for (const p of r.payments) { if (p.method === 'cash' || p.method === 'transfer' || p.method === 'online') a[p.method] += p.amount }
+      if (r.type !== 'season_player' && r.payments.length === 0) a.unpaid += fee
+    }
+  }
+
+  if (type === 'venue_summary') {
+    const byVenue = new Map<string, { name: string; agg: Agg }>()
+    for (const s of sessions) {
+      const e = byVenue.get(s.venueId) ?? { name: s.venue?.name ?? '?', agg: blank() }
+      acc(e.agg, s); byVenue.set(s.venueId, e)
+    }
+    const sorted = [...byVenue.values()].sort((a, b) => b.agg.revenue - a.agg.revenue)
+    const rows: (string | number)[][] = sorted.map((v) => [v.name, v.agg.sessions, v.agg.players, v.agg.revenue, v.agg.unpaid, v.agg.cash, v.agg.transfer, v.agg.online])
+    if (rows.length) {
+      const t = sorted.reduce((a, v) => { a.sessions += v.agg.sessions; a.players += v.agg.players; a.revenue += v.agg.revenue; a.unpaid += v.agg.unpaid; a.cash += v.agg.cash; a.transfer += v.agg.transfer; a.online += v.agg.online; return a }, blank())
+      rows.push(['合計', t.sessions, t.players, t.revenue, t.unpaid, t.cash, t.transfer, t.online])
+    }
+    return { filename: `球館彙總_${tag}.csv`, headers: ['球館', '場次數', '出席人次', '已收金額', '未收金額', '現金', '轉帳', '線上'], rows }
+  }
+
+  // revenue_daily：日期 × 球館
+  const byKey = new Map<string, { date: string; name: string; agg: Agg }>()
+  for (const s of sessions) {
+    const date = ymd(s.sessionDate)
+    const key = `${date}__${s.venueId}`
+    const e = byKey.get(key) ?? { date, name: s.venue?.name ?? '?', agg: blank() }
+    acc(e.agg, s); byKey.set(key, e)
+  }
+  const rows = [...byKey.values()]
+    .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name))
+    .map((e) => [e.date, e.name, e.agg.sessions, e.agg.players, e.agg.revenue, e.agg.unpaid, e.agg.cash, e.agg.transfer, e.agg.online])
+  return { filename: `收入明細_${tag}.csv`, headers: ['日期', '球館', '場次數', '出席人次', '已收金額', '未收金額', '現金', '轉帳', '線上'], rows }
+}

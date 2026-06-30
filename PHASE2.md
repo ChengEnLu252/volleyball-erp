@@ -86,7 +86,12 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   即時彙總（每日收入、付款方式分佈 cash/transfer/online、各館收入/人次/場次/未收款、KPI）；
   原本頁面**寫死的假常數**（WEEKLY/PAYMENT_BREAKDOWN）全部換真。`finance` 改 server 殼（period 走 ?period=）
   + `FinanceClient`。build 綠 + 探針（本週 144 場、總收入 $362,251、現金 59%/轉帳 22%/線上 19%）。
-- ⏳ **P2.2c2 報表匯出 `finance/payments`**：目前是 `mockExport`（假）→ 待做**真 CSV 下載**（產報表檔），列為後續。
+- ✅ **P2.2c2 報表匯出 `finance/payments`（已完成）**：`buildReportTableAsync` 由真 DB 產 4 種報表表格
+  （收入明細 日期×球館 / 球館彙總 含合計 / 付款明細 每筆 / 客戶消費 累計），`exportReportAction` 轉 CSV
+  字串（UTF-8 BOM 給 Excel 正確顯示繁中）→ client 用 Blob 觸發下載。原 `mockExport`（假 setTimeout）移除；
+  頁面改 server 殼（傳 scope 過的球館）+ `PaymentsExportClient`（球館/起訖日篩選、空資料不下載）。
+  授權：球館篩選 server 端再交叉 scope（不能匯他館）。商品流向報表停用、待 P2.4。
+  build 綠 + 探針（近 7 日 144 場 / 1510 筆 Payment，venue/customer/收款人關聯皆解出）。
 - ⏳ **P2.2d 月記帳** `reconciliation/ledger`(+`/review`)（**需新表 `ledgerDay`** + 記帳 upsert action）。
 - ⏳ **P2.2e 誠實商店** `reconciliation/honest-shop`（**需 `boxAudit`**，併 P2.4 商品做）。
 
