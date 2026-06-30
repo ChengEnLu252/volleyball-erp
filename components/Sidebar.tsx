@@ -14,8 +14,9 @@ import { signOut } from 'next-auth/react'
 import {
   getCurrentUser, getCurrentEffectiveRole, getCurrentRoleLabel,
   listCurrentAccessiblePages,
-  getMyUnreadNotificationCount, getPendingOrderCount,
+  getPendingOrderCount,
 } from '@/data/api'
+import { loadNotificationsAction } from '@/app/actions/notifications'
 import { hydrateStore, useStoreSync } from '@/data/store'
 import type { EffectiveRole, PageKey } from '@/data/permissions'
 import { COLORS, FONTS } from './theme/tokens'
@@ -107,6 +108,14 @@ export default function Sidebar() {
     setMounted(true)
   }, [])
 
+  // P2.3c：未讀通知數改讀 DB（每次路由變動 + 掛載時重抓）
+  const [dbUnread, setDbUnread] = useState(0)
+  useEffect(() => {
+    let alive = true
+    loadNotificationsAction().then((res) => { if (alive) setDbUnread(res.ok ? res.unread : 0) })
+    return () => { alive = false }
+  }, [pathname])
+
   const currentUser = getCurrentUser()
 
   const accessibleSet: Set<PageKey> = mounted && currentUser
@@ -115,8 +124,8 @@ export default function Sidebar() {
 
   const visibleLinks = ALL_LINKS.filter(l => accessibleSet.has(l.pageKey))
 
-  // 階段 16：未讀通知數（鈴鐺 badge）
-  const unreadCount = mounted && currentUser ? getMyUnreadNotificationCount() : 0
+  // 階段 16 → P2.3c：未讀通知數（鈴鐺 badge）改讀 DB（server action）
+  const unreadCount = dbUnread
   // 階段 17：待處理訂單數（商城訂單 badge）
   const pendingOrders = mounted && currentUser ? getPendingOrderCount() : 0
 

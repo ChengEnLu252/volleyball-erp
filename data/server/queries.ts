@@ -25,6 +25,7 @@ import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
   SkillLevel, SessionStatus, SeasonRentalStatus,
   LedgerDay, LedgerSlotValue, PartTimerPayrollSheet, ManagerSalaryRecord,
+  WeeklyGoal, AppNotification,
 } from '@/types'
 import {
   LEDGER_AC_RATE, computeLedgerDerived, weekdayOf, summarizeLedgerMonth, ledgerCell,
@@ -1975,4 +1976,50 @@ export async function getManagerSalariesRawAsync(scope: UserScope, venueId: stri
     deductions: (r.deductions ?? []) as unknown as ManagerSalaryRecord['deductions'],
     updatedBy: r.updatedBy, updatedAt: iso(r.updatedAt)!,
   }))
+}
+
+// ── 館長週目標 + 通知（P2.3c）─────────────────────────────────
+function mapWeeklyGoal(r: any): WeeklyGoal {
+  return {
+    id: r.id, venueId: r.venueId, weekStart: ymd(r.weekStart),
+    description: r.description, source: r.source, createdBy: r.createdBy,
+    status: r.status, evidenceId: r.evidenceId,
+    submittedBy: r.submittedBy, submittedAt: iso(r.submittedAt),
+    confirmedBy: r.confirmedBy, confirmedAt: iso(r.confirmedAt),
+    returnReason: r.returnReason,
+    createdAt: iso(r.createdAt)!, updatedAt: iso(r.updatedAt)!,
+  }
+}
+
+/** 某使用者可見範圍的週目標（新到舊）；可選週次過濾。 */
+export async function getWeeklyGoalsForUserAsync(scope: UserScope, weekStart?: string): Promise<WeeklyGoal[]> {
+  if (scope.role === 'none') return []
+  const rows = await prisma.weeklyGoal.findMany({
+    where: {
+      ...venueWhere(scope.visibleVenueIds),
+      ...(weekStart ? { weekStart: new Date(weekStart) } : {}),
+    },
+    orderBy: [{ weekStart: 'desc' }, { createdAt: 'desc' }],
+  })
+  return rows.map(mapWeeklyGoal)
+}
+
+function mapNotification(r: any): AppNotification {
+  return {
+    id: r.id, type: r.type, recipientUserId: r.recipientUserId,
+    title: r.title, body: r.body, linkHref: r.linkHref,
+    relatedType: r.relatedType, relatedId: r.relatedId,
+    isRead: r.isRead, createdAt: iso(r.createdAt)!,
+  }
+}
+
+/** 某 user 的通知（新到舊） */
+export async function getNotificationsForUserAsync(userId: string): Promise<AppNotification[]> {
+  const rows = await prisma.appNotification.findMany({ where: { recipientUserId: userId }, orderBy: { createdAt: 'desc' } })
+  return rows.map(mapNotification)
+}
+
+/** 某 user 未讀通知數（sidebar badge 用） */
+export async function getUnreadNotificationCountAsync(userId: string): Promise<number> {
+  return prisma.appNotification.count({ where: { recipientUserId: userId, isRead: false } })
 }

@@ -118,8 +118,15 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   `saveManagerSalariesAction`（批次 upsert）+ `loadManagerSalariesAction`。`reconciliation/payroll/manager` 改
   client 自取 server action（結算/年終即時 core 算），staff-pay hub 直接嵌入。
   build 綠 + 探針（manager_salaries 0 列；球魔方 2.0 2026-07 冷門開團 25 場、純場地費 $43,780、熱門 23/23 全開）。
-- ⏳ **P2.3c 館長週目標 + 通知**：新表 `weekly_goals` + `app_notifications`；`goals` 頁讀+提交/確認 action、
-  通知收件匣落 DB（真實 LINE/Email push 留 P4）。
+- ✅ **P2.3c 館長週目標 + 通知（已完成）**：新表 `weekly_goals` + `app_notifications` + 3 enum + 4 AuditAction
+  （migration `20260630150000`）。工作流 server action：`createWeeklyGoalAction`（owner 指派/manager 自訂）、
+  `submitWeeklyGoalAction`（截圖 evidenceId）、`confirmWeeklyGoalAction`、`returnWeeklyGoalAction`，每步發
+  `app_notifications`（建立→通知該館 manager、提交→通知 owner、確認/退回→通知提交者）+ AuditLog。通知 action：
+  `loadNotificationsAction` / `markNotificationReadAction` / `markAllNotificationsReadAction`。`goals` / `notifications`
+  頁改 client 自取 server action；**Sidebar 鈴鐺未讀數改讀 DB**（每次路由變動重抓）。
+  截圖實體存物件儲存（`EvidenceUpload` 仍走瀏覽器）**留 P4**，DB 只記 evidenceId 引用。
+  build 綠 + 探針（weekly_goals/app_notifications 0 列；通知對象池 manager 2 筆、owner 1 人）。
+  > ✅ **P2.3 薪資/績效 全部完成**（a 工讀生 / b 管理職 / c 週目標+通知）。
 
 ### P2.4 商品 / 商城（財務鏈完成後）
 - 跨館庫存查詢 / 調貨(`products` + `products/transfers`)、線上商城(`shop/*`)、後台訂單(`orders`)、誠實商店庫存。

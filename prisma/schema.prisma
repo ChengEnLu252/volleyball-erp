@@ -574,6 +574,11 @@ enum AuditAction {
   WAIVE_REFUND
   // P2.2d 新增：月記帳
   UPSERT_LEDGER
+  // P2.3c 新增：館長週目標
+  CREATE_WEEKLY_GOAL
+  SUBMIT_WEEKLY_GOAL
+  CONFIRM_WEEKLY_GOAL
+  RETURN_WEEKLY_GOAL
 }
 
 
@@ -707,4 +712,68 @@ model ManagerSalary {
 
   @@index([venueId, month])
   @@map("manager_salaries")
+}
+
+
+// ── 館長週目標 + 通知（P2.3c）──────────────────────────────────
+// 工作流：assigned →（館長上傳截圖）→ submitted →（老闆）→ confirmed / returned。
+// evidenceId 引用既有上傳機制（截圖實體存物件儲存留 P4）。
+// user/venue 以 id 字串引用（不設 FK，沿用 demo 慣例、減少 back-relation）。
+
+enum WeeklyGoalStatus {
+  assigned
+  submitted
+  confirmed
+  returned
+}
+
+enum WeeklyGoalSource {
+  owner_assigned
+  manager_self
+}
+
+enum NotificationType {
+  goal_submitted
+  goal_confirmed
+  goal_returned
+  order_placed
+}
+
+model WeeklyGoal {
+  id           String           @id @default(uuid())
+  venueId      String           @map("venue_id")
+  /// 該週週一（YYYY-MM-DD）
+  weekStart    DateTime         @db.Date @map("week_start")
+  description  String
+  source       WeeklyGoalSource
+  createdBy    String           @map("created_by")
+  status       WeeklyGoalStatus @default(assigned)
+  /// 完成截圖引用（實體存物件儲存留 P4）；未上傳為 null
+  evidenceId   String?          @map("evidence_id")
+  submittedBy  String?          @map("submitted_by")
+  submittedAt  DateTime?        @map("submitted_at")
+  confirmedBy  String?          @map("confirmed_by")
+  confirmedAt  DateTime?        @map("confirmed_at")
+  returnReason String?          @map("return_reason")
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @updatedAt @map("updated_at")
+
+  @@index([venueId, weekStart])
+  @@map("weekly_goals")
+}
+
+model AppNotification {
+  id              String           @id @default(uuid())
+  type            NotificationType
+  recipientUserId String           @map("recipient_user_id")
+  title           String
+  body            String
+  linkHref        String?          @map("link_href")
+  relatedType     String?          @map("related_type")
+  relatedId       String?          @map("related_id")
+  isRead          Boolean          @default(false) @map("is_read")
+  createdAt       DateTime         @default(now()) @map("created_at")
+
+  @@index([recipientUserId, isRead])
+  @@map("app_notifications")
 }
