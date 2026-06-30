@@ -138,8 +138,13 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   build 綠 + 探針（近 30 天：運動飲料售112/$3,920、護膝售99/$27,720、排球售93/$79,050、球魔方帽售113/$28,250）。
 - ⏳ **P2.4b 跨館調貨**：新表 `product_transfers`（申請→出貨→收貨→完成，樂觀鎖）；`products/transfers` 頁接 DB。
 - ⏳ **P2.4c 線上商城 + 訂單**：新表 `shop_products` + `orders` + `order_items`（獨立線上庫存池、金流手動標記留 P2.5）。
-- ⏳ **P2.4d 誠實商店（=P2.2e）+ 收尾**：新表 `box_audits`；串月記帳「誠實商店」桶、異常「商品贈送過量(gift_excess)」、
-  dashboard 商品營收。
+- 🟡 **P2.4d 收尾串接（部分完成）**：
+  - ✅ **異常清單「商品贈送過量(gift_excess)」**：`getReconciliationAnomaliesForUserAsync` 第 4 類，由
+    `getProductReconciliationForUserAsync` 的 `hasGiftAnomaly`（**逐館**贈比 >30%、樣本≥5）產生；AnomaliesClient
+    早已支援該 type。探針：目前 seed 觸發 4 筆（全館合計贈比 14–19%，但逐館有 >30% → 正確抓出）。
+  - ✅ **dashboard 商品營收/低庫存接真**：商品營收原已由 `revenueByVenue` 加總真 ProductTransaction（Round 9D）；
+    本回合把 `stockAlerts` 從寫死 0 改為**真低庫存數**（該館限定+共用商品 currentStock≤水位）。探針：目前 seed 0 筆（庫存健康）。
+  - ⏳ **誠實商店（=P2.2e）**：新表 `box_audits` + 月記帳「誠實商店」桶系統側 — 待對方標記**哪些是誠實商店商品**後做。
 
 ### P2.5 外接整合（可與上面並行）
 - **真 LINE 登入**：LINE OAuth 接客戶報名端（取代 `components/booking/LineLoginModal` 的 mock）。
@@ -152,7 +157,7 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
     - 手機號同、姓名不同 → 跳既有三選一對話框（用舊／覆蓋／都新增），防「一號多人」誤併。
     - 沿用並收緊現有報名自動建檔去重邏輯（見 `data/server` 報名 action）。
   - LINE 在這裡只負責「**該館的登入身分** + **該館官方帳號發通知的 userId**」；真正的客戶身分鑰匙是手機號＋姓名。
-- **真 AI 摘要**：`app/api/ai/route.ts` 接 Claude API（用最新 Claude 模型），dashboard / `ai-summary` 罐頭換真。
+- ~~**真 AI 摘要**：`app/api/ai/route.ts` 接 Claude API~~ → **對方 2026-06-30 決定先不做**（未來再通知）；維持罐頭回覆。
 - **Excel 匯入**：上傳 → 解析 → 欄位對應 → 批量 upsert（客戶 + 歷史帳）。
 - **通知管道**：收件匣事件 → 真 LINE（Messaging API）/ Email 發送。每館用**自己的官方帳號**發（報名飛翼 → 飛翼官方帳號回成功通知）。
 

@@ -442,7 +442,7 @@ export async function getDashboardForUserAsync(scope: UserScope, todayStr?: stri
     },
   }
 
-  const [venues, todaySessions, ydaySessions, todayTx, ydayTx, alertRows, weekSessions] = await Promise.all([
+  const [venues, todaySessions, ydaySessions, todayTx, ydayTx, alertRows, weekSessions, activeProducts] = await Promise.all([
     prisma.venue.findMany({ where: venueWhere, orderBy: { id: 'asc' } }),
     prisma.session.findMany({ where: { ...vWhere, sessionDate: new Date(today) }, include: sessionInclude }),
     prisma.session.findMany({ where: { ...vWhere, sessionDate: new Date(yesterday) }, include: sessionInclude }),
@@ -450,7 +450,12 @@ export async function getDashboardForUserAsync(scope: UserScope, todayStr?: stri
     prisma.productTransaction.findMany({ where: { ...vWhere, operatedAt: { gte: new Date(yesterday + 'T00:00:00.000Z'), lt: new Date(new Date(yesterday + 'T00:00:00.000Z').getTime() + 86400000) } }, select: { venueId: true, type: true, totalAmount: true } }),
     prisma.anomalyAlert.findMany({ where: vWhere, orderBy: { createdAt: 'desc' } }),
     prisma.session.findMany({ where: { ...vWhere, status: 'completed', sessionDate: { gte: new Date(since7), lte: new Date(today) } }, select: { venueId: true, maxCapacity: true, _count: { select: { registrations: { where: { status: { not: 'cancelled' } } } } } } }),
+    prisma.product.findMany({ where: { isActive: true }, select: { venueId: true, currentStock: true, lowStockThreshold: true } }),
   ])
+
+  // 低庫存：該館限定 + 全館共用商品（P2.4d 收尾，取代寫死 0）
+  const lowStockByVenue = (vid: string) =>
+    activeProducts.filter((p) => (p.venueId === vid || p.venueId == null) && p.currentStock <= p.lowStockThreshold).length
 
   const todayRevMap = revenueByVenue(todaySessions as DaySessionRow[], todayTx)
   const ydayRevMap = revenueByVenue(ydaySessions as DaySessionRow[], ydayTx)
@@ -485,7 +490,7 @@ export async function getDashboardForUserAsync(scope: UserScope, todayStr?: stri
     return {
       venueId: v.id, venueName: v.name,
       totalRevenue: todayRevMap.get(v.id) ?? 0, totalPlayers: players, totalSessions: vs.length,
-      unpaidCount, unpaidAmount, giftRatio, stockAlerts: 0,
+      unpaidCount, unpaidAmount, giftRatio, stockAlerts: lowStockByVenue(v.id),
     }
   })
 
@@ -1306,8 +1311,8 @@ export async function getFinanceReportForUserAsync(scope: UserScope, period: Fin
 // 形狀對齊 data/api.ts 的 ReconciliationAnomaly。目前由已遷 DB 資料產生 3 類：
 //   rental_unpaid（季租未繳齊）、session_shortfall（近 7 天場次少收 ≥$200）、
 //   self_report_mismatch（無人場次自助回報筆數 > Payment 筆數）。
-//   gift_excess（商品，P2.4）、ledger_*（月記帳，P2.2d）待對應子系統遷移後補。
-export type ReconAnomalyType = 'rental_unpaid' | 'session_shortfall' | 'self_report_mismatch'
+//   gift_excess（P2.4d：商品贈送比例過高）；ledger_*（月記帳，P2.2d）待對應子系統補。
+export type ReconAnomalyType = 'rental_unpaid' | 'session_shortfall' | 'self_report_mismatch' | 'gift_excess'
 export type ReconAnomalyRow = {
   id: string
   type: ReconAnomalyType
@@ -1375,6 +1380,20 @@ export async function getReconciliationAnomaliesForUserAsync(scope: UserScope): 
       title: `${vname} ${date} 自助回報 ${missing} 筆未對到 Payment`,
       description: `自助回報 ${selfReports} 筆 vs 系統 Payment ${payments} 筆，落差約 $${amount.toLocaleString()}`,
       amount, linkType: 'session', linkId: s.id,
+    })
+  }
+
+  // 4. 商品贈送比例過高（P2.4d）：近 30 天某商品在某館贈送比例 > 30%（樣本 ≥ 5）
+  for (const p of await getProductReconciliationForUserAsync(scope)) {
+    if (!p.hasGiftAnomaly || !p.worstVenue) continue
+    const w = p.worstVenue
+    out.push({
+      id: `anom-gift-${p.productId}-${w.venueId}`, type: 'gift_excess',
+      severity: w.giftRatio >= 0.5 ? 'high' : 'medium',
+      venueId: w.venueId, venueName: w.venueName,
+      title: `${w.venueName} ${p.productName} 贈送比例 ${Math.round(w.giftRatio * 100)}%`,
+      description: `近 30 天 售 ${w.saleCount} / 贈 ${w.giftCount}（贈送等值損失約 $${(w.giftCount * p.unitPrice).toLocaleString()}）`,
+      amount: w.giftCount * p.unitPrice, linkType: 'product', linkId: p.productId,
     })
   }
 
