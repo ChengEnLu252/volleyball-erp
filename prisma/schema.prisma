@@ -47,6 +47,7 @@ model Venue {
   anomalyAlerts       AnomalyAlert[]
   ledgerDays          LedgerDay[]
   partTimerSheets     PartTimerSheet[]
+  managerSalaries     ManagerSalary[]
 
   @@map("venues")
 }
@@ -78,6 +79,7 @@ model User {
   auditLogs           AuditLog[]
   ledgerDays          LedgerDay[]
   partTimerSheets     PartTimerSheet[]
+  managerSalaries     ManagerSalary[]
 
   @@map("users")
 }
@@ -675,4 +677,34 @@ model PartTimerSheet {
   @@unique([venueId, month])
   @@index([venueId, month])
   @@map("part_timer_sheets")
+}
+
+
+// ── 管理職薪資（P2.3b）─────────────────────────────────────────
+// 每人每月一筆（一館一月可多人）。bonuses/deductions = ManagerLineItem[]（JSON）。
+// 結算（含冷門場次獎金/分潤、請假扣薪）由 data/payroll-core 即時算、不存。
+// id 由 client 提供（`${venueId}:${month}:slug`），upsert by id。
+
+model ManagerSalary {
+  id                  String   @id
+  venueId             String   @map("venue_id")
+  month               String   @db.VarChar(7)
+  personName          String   @map("person_name")
+  baseSalary          Int      @default(0) @map("base_salary")
+  designPay           Int      @default(0) @map("design_pay")
+  /// ManagerLineItem[]（JSON）：額外獎金
+  bonuses             Json     @default("[]")
+  includeOffPeakBonus Boolean  @default(true) @map("include_off_peak_bonus")
+  insuranceSelf       Int      @default(0) @map("insurance_self")
+  leaveDays           Int      @default(0) @map("leave_days")
+  /// ManagerLineItem[]（JSON）：其他扣款
+  deductions          Json     @default("[]")
+  updatedBy           String   @map("updated_by")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  venue   Venue @relation(fields: [venueId], references: [id])
+  updater User  @relation(fields: [updatedBy], references: [id])
+
+  @@index([venueId, month])
+  @@map("manager_salaries")
 }

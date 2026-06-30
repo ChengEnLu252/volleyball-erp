@@ -24,12 +24,13 @@ import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
 import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
   SkillLevel, SessionStatus, SeasonRentalStatus,
-  LedgerDay, LedgerSlotValue, PartTimerPayrollSheet,
+  LedgerDay, LedgerSlotValue, PartTimerPayrollSheet, ManagerSalaryRecord,
 } from '@/types'
 import {
   LEDGER_AC_RATE, computeLedgerDerived, weekdayOf, summarizeLedgerMonth, ledgerCell,
   type LedgerMonthSummary, type LedgerDailyCompareRow, type LedgerCompareCell, type LedgerReconResult,
 } from '@/data/ledger-core'
+import { getOperatingFloor as getOperatingFloorCore, type ManagerSysInputs } from '@/data/payroll-core'
 
 // 與 data/api.ts 的同名 filter 對齊（刻意內聯，避免從 api.ts import）
 export type SessionFilter = {
@@ -1908,4 +1909,70 @@ export async function getPartTimerSheetRawAsync(scope: UserScope, venueId: strin
     updatedBy: row.updatedBy,
     updatedAt: iso(row.updatedAt)!,
   }
+}
+
+// ── 管理職薪資系統推導（P2.3b）─────────────────────────────────
+// 取代 payroll.ts 的 GENERATED 版：冷門開團數/冷門純場地費/熱門全開/月營收/低標 皆由 DB 算。
+
+/** 某館某年系統年度營收（12 個月加總） */
+export async function getAnnualVenueRevenueAsync(venueId: string, year: number): Promise<number> {
+  let sum = 0
+  for (let m = 1; m <= 12; m++) sum += await getMonthlyVenueRevenueAsync(venueId, `${year}-${String(m).padStart(2, '0')}`)
+  return sum
+}
+
+/** 管理職薪資的系統推導輸入（冷門/熱門/營收/低標）。公式注入給 payroll-core。 */
+export async function getManagerSysInputsAsync(venueId: string, ym: string): Promise<ManagerSysInputs> {
+  const { gte, lt } = monthBounds(ym)
+  const sessions = await prisma.session.findMany({
+    where: { venueId, sessionDate: { gte, lt } },
+    select: {
+      status: true, courtFee: true, acFee: true, acEnabled: true,
+      timeslot: { select: { isHotZone: true } },
+      registrations: { select: { payments: { where: { status: 'paid' }, select: { amount: true } } } },
+    },
+  })
+
+  let offPeakOpenedCount = 0
+  let offPeakCourtRevenue = 0
+  let hotTotal = 0, hotOpened = 0
+  for (const s of sessions) {
+    const hz = s.timeslot?.isHotZone
+    if (hz === true) {
+      hotTotal += 1
+      if (s.status !== 'cancelled') hotOpened += 1
+    } else if (hz === false) {
+      if (s.status !== 'cancelled') {
+        offPeakOpenedCount += 1
+        const actual = s.registrations.reduce((a, r) => a + r.payments.reduce((x, p) => x + (p.amount > 0 ? p.amount : 0), 0), 0)
+        const court = s.courtFee ?? 0
+        const ac = s.acEnabled ? (s.acFee ?? 0) : 0
+        const courtShare = court + ac > 0 ? court / (court + ac) : 1
+        offPeakCourtRevenue += actual * courtShare
+      }
+    }
+  }
+  const monthlyRevenue = await getMonthlyVenueRevenueAsync(venueId, ym)
+  return {
+    offPeakOpenedCount,
+    offPeakCourtRevenue: Math.round(offPeakCourtRevenue),
+    hotStatus: { total: hotTotal, opened: hotOpened, fullyOpen: hotTotal > 0 && hotOpened === hotTotal },
+    monthlyRevenue,
+    floor: getOperatingFloorCore(venueId),
+  }
+}
+
+/** 某館某月所有管理職薪資（raw，供編輯）。venue 不在 scope → 空。 */
+export async function getManagerSalariesRawAsync(scope: UserScope, venueId: string, ym: string): Promise<ManagerSalaryRecord[]> {
+  if (!venueInScope(scope, venueId)) return []
+  const rows = await prisma.managerSalary.findMany({ where: { venueId, month: ym }, orderBy: { personName: 'asc' } })
+  return rows.map((r) => ({
+    id: r.id, venueId: r.venueId, month: r.month, personName: r.personName,
+    baseSalary: r.baseSalary, designPay: r.designPay,
+    bonuses: (r.bonuses ?? []) as unknown as ManagerSalaryRecord['bonuses'],
+    includeOffPeakBonus: r.includeOffPeakBonus,
+    insuranceSelf: r.insuranceSelf, leaveDays: r.leaveDays,
+    deductions: (r.deductions ?? []) as unknown as ManagerSalaryRecord['deductions'],
+    updatedBy: r.updatedBy, updatedAt: iso(r.updatedAt)!,
+  }))
 }

@@ -111,8 +111,13 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   `loadPartTimerSheetAction`（owner/manager+scope+AuditLog）。`reconciliation/payroll` 頁改 **client 自取 server
   action**（薪資比例即時用 core 算），不拖 server-only → `staff-pay` hub 直接嵌入。
   build 綠 + 探針（part_timer_sheets 0 列；系統營收 球魔方 2.0 2026-07 = $117,630）。
-- ⏳ **P2.3b 管理職薪資**：新表 `manager_salaries`；冷門場次獎金/年終的系統推導改查 DB（payroll-core 注入）；
-  `reconciliation/payroll/manager` 頁接 DB。
+- ✅ **P2.3b 管理職薪資（已完成）**：新表 `manager_salaries`（一人一月一筆，bonuses/deductions JSON，id 由
+  client 提供，migration `20260630140000`）。payroll-core 補入冷門/年終/管理職純計算（公式不變，系統值注入）；
+  payroll.ts 改 GENERATED wrapper（year-end.ts 不受影響）。server：`getManagerSysInputsAsync`（冷門開團數/冷門純
+  場地費/熱門全開/月營收/低標 全查 DB）、`getAnnualVenueRevenueAsync`、`getManagerSalariesRawAsync`。
+  `saveManagerSalariesAction`（批次 upsert）+ `loadManagerSalariesAction`。`reconciliation/payroll/manager` 改
+  client 自取 server action（結算/年終即時 core 算），staff-pay hub 直接嵌入。
+  build 綠 + 探針（manager_salaries 0 列；球魔方 2.0 2026-07 冷門開團 25 場、純場地費 $43,780、熱門 23/23 全開）。
 - ⏳ **P2.3c 館長週目標 + 通知**：新表 `weekly_goals` + `app_notifications`；`goals` 頁讀+提交/確認 action、
   通知收件匣落 DB（真實 LINE/Email push 留 P4）。
 
