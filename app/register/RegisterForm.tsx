@@ -17,17 +17,20 @@ export default function RegisterForm({ venues }: { venues: Venue[] }) {
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [position, setPosition] = useState<'manager' | 'staff'>('staff')
-  const [venueId, setVenueId] = useState(venues[0]?.id ?? '')
+  const [venueIds, setVenueIds] = useState<string[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
 
+  const toggleVenue = (id: string) =>
+    setVenueIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]))
+
   const onSubmit = async () => {
     setError('')
     if (password !== confirm) { setError('兩次密碼不一致'); return }
-    if (!venueId) { setError('請選擇球館'); return }
+    if (venueIds.length === 0) { setError('請至少選擇一間球館'); return }
     setBusy(true)
-    const res = await registerUser({ name, username, password, position, venueId })
+    const res = await registerUser({ name, username, password, position, venueIds })
     if (!res.ok) { setError(res.error); setBusy(false); return }
     setDone(true)
   }
@@ -86,10 +89,23 @@ export default function RegisterForm({ venues }: { venues: Venue[] }) {
                 ))}
               </div>
             </Field>
-            <Field label="所屬球館">
-              <select style={input} value={venueId} onChange={e => setVenueId(e.target.value)}>
-                {venues.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
-              </select>
+            <Field label="所屬球館（可多選）">
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {venues.map(v => {
+                  const on = venueIds.includes(v.id)
+                  return (
+                    <button key={v.id} type="button" onClick={() => toggleVenue(v.id)} style={{
+                      padding: '8px 12px', borderRadius: 9, cursor: 'pointer', fontWeight: 700, fontSize: 13,
+                      border: on ? `2px solid ${COLORS.pink500}` : `1.5px solid ${COLORS.pink100}`,
+                      background: on ? COLORS.pink50 : '#fff',
+                      color: on ? COLORS.pink600 : COLORS.ink700,
+                    }}>{on ? '✓ ' : ''}{v.name}</button>
+                  )
+                })}
+              </div>
+              <div style={{ fontSize: 11, color: COLORS.ink500, marginTop: 6 }}>
+                一人可管理多間球館，需要的全部勾選
+              </div>
             </Field>
 
             {error && <div style={{ fontSize: 12, color: COLORS.danger, marginTop: 4, fontWeight: 600 }}>⚠ {error}</div>}

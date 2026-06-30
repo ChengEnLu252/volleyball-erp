@@ -19,7 +19,7 @@ export type RegisterInput = {
   username: string
   password: string
   position: 'manager' | 'staff' // 館長 / 工讀生
-  venueId: string
+  venueIds: string[]            // 可管理多間球館
 }
 
 export type ActionResult = { ok: true } | { ok: false; error: string }
@@ -28,7 +28,8 @@ export async function registerUser(input: RegisterInput): Promise<ActionResult> 
   const name = input.name?.trim() ?? ''
   const username = input.username?.trim() ?? ''
   const password = input.password ?? ''
-  const { position, venueId } = input
+  const { position } = input
+  const venueIds = Array.from(new Set(input.venueIds ?? [])) // 去重
 
   // —— 後端驗證 ——
   if (name.length < 2) return { ok: false, error: '請輸入姓名' }
@@ -37,9 +38,11 @@ export async function registerUser(input: RegisterInput): Promise<ActionResult> 
   if (password.length < 4) return { ok: false, error: '密碼至少 4 碼' }
   if (position !== 'manager' && position !== 'staff')
     return { ok: false, error: '職位不正確' }
+  if (venueIds.length === 0) return { ok: false, error: '請至少選擇一間球館' }
 
-  const venue = await prisma.venue.findUnique({ where: { id: venueId } })
-  if (!venue || !venue.isActive) return { ok: false, error: '請選擇有效的球館' }
+  // 所選球館須全部有效且啟用
+  const venues = await prisma.venue.findMany({ where: { id: { in: venueIds }, isActive: true }, select: { id: true } })
+  if (venues.length !== venueIds.length) return { ok: false, error: '含無效的球館，請重新選擇' }
 
   const passwordHash = await bcrypt.hash(password, 10)
 
@@ -52,7 +55,7 @@ export async function registerUser(input: RegisterInput): Promise<ActionResult> 
         passwordHash,
         globalRole: 'staff',          // 館長/工讀生 globalRole 皆 staff，差別在 venueRole
         approvalStatus: 'pending',    // 等老闆審核
-        venueRoles: { create: [{ venueId, role: position }] },
+        venueRoles: { create: venueIds.map((venueId) => ({ venueId, role: position })) },
       },
     })
     return { ok: true }
