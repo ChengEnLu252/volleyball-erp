@@ -66,6 +66,22 @@ export type OrderView = {
   items: OrderItemView[]
 }
 
+export type OrderChannel = 'online' | 'backend'
+
+/** 後台訂單（比前台 OrderView 多通路 / 時間戳 / 物流 / 代客操作員） */
+export type AdminOrder = OrderView & {
+  channel: OrderChannel
+  placedByUserId: string | null
+  placedByName: string | null
+  paidAt: string | null
+  fulfilledAt: string | null
+  cancelledAt: string | null
+  cancelReason: string | null
+  trackingNumber: string | null
+  shippingProvider: string | null
+  shippedAt: string | null
+}
+
 /** 結帳送出的輸入 */
 export type PlaceOrderInput = {
   customerName: string

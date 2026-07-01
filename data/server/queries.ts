@@ -21,9 +21,11 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
+import { SHOP_SHIPPING_FEE } from '@/data/shop-types'
 import type {
   StoreColor, StoreVariant, StoreCategory, StoreProduct,
   OrderView, OrderItemView, ShippingInfoView, FulfillmentType, PaymentChannel, OrderStatus,
+  AdminOrder, OrderChannel, PlaceOrderInput,
 } from '@/data/shop-types'
 import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
@@ -2360,4 +2362,216 @@ export async function lookupOrderViewAsync(orderNo: string, phone: string): Prom
   const o = await prisma.order.findFirst({ where: { orderNo: no, customerPhone: ph }, include: { items: true } })
   if (!o) return null
   return mapOrderView(o, await pickupVenueName(o.pickupVenueId))
+}
+
+
+// ============================================================
+// SC3 — 後台訂單管理（owner 全部；manager 自館到館自取單）
+// ============================================================
+
+/** 訂單可見範圍：owner 看全部；manager 只看自己館的「到館自取」單。 */
+function orderVisibilityWhere(scope: UserScope): Prisma.OrderWhereInput {
+  if (scope.visibleVenueIds === 'all') return {}
+  const ids = scope.visibleVenueIds.length ? scope.visibleVenueIds : ['__none__']
+  return { fulfillment: 'pickup', pickupVenueId: { in: ids } }
+}
+
+function mapAdminOrder(
+  o: Prisma.OrderGetPayload<{ include: { items: true } }>,
+  venueName: string | null,
+  placedByName: string | null,
+): AdminOrder {
+  const items: OrderItemView[] = o.items.map((it) => ({
+    productId: it.productId, name: it.name, unitPrice: it.unitPrice, quantity: it.quantity,
+    subtotal: it.subtotal, size: it.size, color: it.color, imageUrl: it.imageUrl,
+  }))
+  return {
+    id: o.id, orderNo: o.orderNo, status: o.status as OrderStatus,
+    customerName: o.customerName, customerPhone: o.customerPhone, customerEmail: o.customerEmail,
+    itemTotal: o.itemTotal, shippingFee: o.shippingFee, total: o.total,
+    fulfillment: o.fulfillment as FulfillmentType,
+    pickupVenueId: o.pickupVenueId, pickupVenueName: venueName,
+    shipping: (o.shipping as unknown as ShippingInfoView | null) ?? null,
+    paymentChannel: o.paymentChannel as PaymentChannel,
+    notes: o.notes, createdAt: o.createdAt.toISOString(), items,
+    channel: o.channel as OrderChannel,
+    placedByUserId: o.placedByUserId, placedByName,
+    paidAt: o.paidAt?.toISOString() ?? null,
+    fulfilledAt: o.fulfilledAt?.toISOString() ?? null,
+    cancelledAt: o.cancelledAt?.toISOString() ?? null,
+    cancelReason: o.cancelReason,
+    trackingNumber: o.trackingNumber, shippingProvider: o.shippingProvider,
+    shippedAt: o.shippedAt?.toISOString() ?? null,
+  }
+}
+
+/** 後台訂單列表（scope 過濾 + 可選狀態）。 */
+export async function getOrdersForUserAsync(scope: UserScope, statusFilter?: OrderStatus): Promise<AdminOrder[]> {
+  const where: Prisma.OrderWhereInput = { ...orderVisibilityWhere(scope), ...(statusFilter ? { status: statusFilter } : {}) }
+  const orders = await prisma.order.findMany({ where, include: { items: true }, orderBy: { createdAt: 'desc' }, take: 300 })
+  const venueIds = [...new Set(orders.map((o) => o.pickupVenueId).filter((x): x is string => !!x))]
+  const userIds = [...new Set(orders.map((o) => o.placedByUserId).filter((x): x is string => !!x))]
+  const [venues, users] = await Promise.all([
+    venueIds.length ? prisma.venue.findMany({ where: { id: { in: venueIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+    userIds.length ? prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } }) : Promise.resolve([]),
+  ])
+  const vName = new Map(venues.map((v) => [v.id, v.name]))
+  const uName = new Map(users.map((u) => [u.id, u.name]))
+  return orders.map((o) => mapAdminOrder(o, o.pickupVenueId ? (vName.get(o.pickupVenueId) ?? null) : null, o.placedByUserId ? (uName.get(o.placedByUserId) ?? null) : null))
+}
+
+/** 後台訂單狀態統計（同 scope）。 */
+export async function getOrderCountsForUserAsync(scope: UserScope): Promise<Record<OrderStatus, number>> {
+  const grouped = await prisma.order.groupBy({ by: ['status'], where: orderVisibilityWhere(scope), _count: true })
+  const counts: Record<OrderStatus, number> = { pending: 0, paid: 0, fulfilled: 0, cancelled: 0 }
+  for (const g of grouped) counts[g.status as OrderStatus] = g._count
+  return counts
+}
+
+/** 後台單一訂單（授權檢查用：回原始 + 可見判斷交給 action）。 */
+export async function getAdminOrderByIdAsync(id: string): Promise<AdminOrder | null> {
+  const o = await prisma.order.findUnique({ where: { id }, include: { items: true } })
+  if (!o) return null
+  const vName = o.pickupVenueId ? (await prisma.venue.findUnique({ where: { id: o.pickupVenueId }, select: { name: true } }))?.name ?? null : null
+  const uName = o.placedByUserId ? (await prisma.user.findUnique({ where: { id: o.placedByUserId }, select: { name: true } }))?.name ?? null : null
+  return mapAdminOrder(o, vName, uName)
+}
+
+/** 商城庫存管理：所有商品（含下架），供後台調庫存 / 上下架。 */
+export async function getShopInventoryAsync(): Promise<StoreProduct[]> {
+  const products = await prisma.shopProduct.findMany({
+    include: { images: true, variants: true, categories: { include: { category: true } } },
+    orderBy: { createdAt: 'desc' },
+  })
+  return products.map(mapStoreProduct)
+}
+
+
+// ── 共用：建立訂單（前台結帳 / 後台代客共用）──────────────────────
+export type CreateOrderResult = { ok: true; orderId: string; orderNo: string } | { ok: false; reason: string }
+
+function genShopOrderNo(): string {
+  const d = new Date()
+  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  return `SH-${ymd}-${String(Math.floor(1000 + Math.random() * 9000))}`
+}
+
+export async function createShopOrderAsync(
+  input: PlaceOrderInput,
+  meta: { channel: OrderChannel; placedByUserId: string | null },
+): Promise<CreateOrderResult> {
+  const name = (input?.customerName ?? '').trim()
+  const phone = (input?.customerPhone ?? '').trim()
+  if (!name) return { ok: false, reason: '請填寫姓名' }
+  if (!phone) return { ok: false, reason: '請填寫電話' }
+  if (!Array.isArray(input.items) || input.items.length === 0) return { ok: false, reason: '購物車是空的' }
+  if (input.fulfillment === 'pickup' && !input.pickupVenueId) return { ok: false, reason: '請選擇取貨球館' }
+  if (input.fulfillment === 'shipping') {
+    const s = input.shipping
+    if (!s || !s.recipient.trim() || !s.phone.trim() || !s.address.trim()) return { ok: false, reason: '請填寫完整收件資訊' }
+  }
+
+  const merged = new Map<string, { productId: string; size: string | null; color: string | null; quantity: number }>()
+  for (const it of input.items) {
+    const q = Math.floor(Number(it.quantity))
+    if (!it.productId || !Number.isFinite(q) || q <= 0) continue
+    const size = it.size ?? null, color = it.color ?? null
+    const key = `${it.productId}|${size ?? ''}|${color ?? ''}`
+    const prev = merged.get(key)
+    if (prev) prev.quantity += q
+    else merged.set(key, { productId: it.productId, size, color, quantity: q })
+  }
+  if (merged.size === 0) return { ok: false, reason: '購物車是空的' }
+
+  const productIds = [...new Set([...merged.values()].map((m) => m.productId))]
+  const products = await prisma.shopProduct.findMany({
+    where: { id: { in: productIds } },
+    include: { variants: true, images: { orderBy: { sortOrder: 'asc' } } },
+  })
+  const byId = new Map(products.map((p) => [p.id, p]))
+
+  type Op = { productId: string; variantId: string | null; qty: number }
+  const ops: Op[] = []
+  const orderItems: { productId: string; name: string; unitPrice: number; quantity: number; subtotal: number; size: string | null; color: string | null; imageUrl: string | null }[] = []
+  for (const { productId, size, color, quantity } of merged.values()) {
+    const p = byId.get(productId)
+    if (!p || !p.isListed) return { ok: false, reason: '部分商品已下架，請重新整理購物車' }
+    const spec = [size, color].filter(Boolean).join('・')
+    let variantId: string | null = null
+    if (p.variants.length > 0) {
+      const v = p.variants.find((x) => (x.size ?? null) === size && (x.color ?? null) === color)
+      if (!v) return { ok: false, reason: `「${p.name}」請選擇尺寸 / 顏色` }
+      if (quantity > v.stock) return { ok: false, reason: `「${p.name}${spec ? `（${spec}）` : ''}」庫存不足（剩 ${v.stock}）` }
+      variantId = v.id
+    } else if (quantity > p.onlineStock) {
+      return { ok: false, reason: `「${p.name}」庫存不足（剩 ${p.onlineStock}）` }
+    }
+    ops.push({ productId: p.id, variantId, qty: quantity })
+    orderItems.push({ productId: p.id, name: p.name, unitPrice: p.unitPrice, quantity, subtotal: p.unitPrice * quantity, size, color, imageUrl: p.images[0]?.url ?? null })
+  }
+
+  const itemTotal = orderItems.reduce((s, it) => s + it.subtotal, 0)
+  const shippingFee = input.fulfillment === 'shipping' ? SHOP_SHIPPING_FEE : 0
+  const total = itemTotal + shippingFee
+
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const orderNo = genShopOrderNo()
+      const created = await prisma.$transaction(async (tx) => {
+        for (const op of ops) {
+          if (op.variantId) {
+            const r = await tx.shopProductVariant.updateMany({ where: { id: op.variantId, stock: { gte: op.qty } }, data: { stock: { decrement: op.qty } } })
+            if (r.count === 0) throw new Error('OUT_OF_STOCK')
+          } else {
+            const r = await tx.shopProduct.updateMany({ where: { id: op.productId, onlineStock: { gte: op.qty } }, data: { onlineStock: { decrement: op.qty } } })
+            if (r.count === 0) throw new Error('OUT_OF_STOCK')
+          }
+        }
+        for (const pid of [...new Set(ops.filter((o) => o.variantId).map((o) => o.productId))]) {
+          const agg = await tx.shopProductVariant.aggregate({ where: { shopProductId: pid }, _sum: { stock: true } })
+          await tx.shopProduct.update({ where: { id: pid }, data: { onlineStock: agg._sum.stock ?? 0 } })
+        }
+        return tx.order.create({
+          data: {
+            orderNo, channel: meta.channel, placedByUserId: meta.placedByUserId,
+            customerName: name, customerPhone: phone, customerEmail: input.customerEmail?.trim() || null,
+            itemTotal, shippingFee, total, fulfillment: input.fulfillment,
+            pickupVenueId: input.fulfillment === 'pickup' ? input.pickupVenueId : null,
+            shipping: input.fulfillment === 'shipping'
+              ? ({ recipient: input.shipping!.recipient.trim() || name, phone: input.shipping!.phone.trim() || phone, address: input.shipping!.address.trim() } as unknown as Prisma.InputJsonValue)
+              : Prisma.JsonNull,
+            paymentChannel: input.paymentChannel, status: 'pending', notes: input.notes?.trim() || null,
+            items: { create: orderItems },
+          },
+        })
+      })
+      return { ok: true, orderId: created.id, orderNo: created.orderNo }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg === 'OUT_OF_STOCK') return { ok: false, reason: '部分商品剛剛售出，請重新整理購物車' }
+      if (msg.includes('Unique constraint') || (e as { code?: string })?.code === 'P2002') continue
+      return { ok: false, reason: '下單失敗，請稍後再試' }
+    }
+  }
+  return { ok: false, reason: '下單失敗，請稍後再試' }
+}
+
+/** 取消訂單 → 回補庫存（有規格回補該規格並重算 onlineStock；無規格回補 onlineStock）。 */
+export async function restockOrderItemsAsync(tx: Prisma.TransactionClient, orderId: string): Promise<void> {
+  const items = await tx.orderItem.findMany({ where: { orderId } })
+  const touchedVariantProducts = new Set<string>()
+  for (const it of items) {
+    const p = await tx.shopProduct.findUnique({ where: { id: it.productId }, include: { variants: true } })
+    if (!p) continue
+    if (p.variants.length > 0) {
+      const v = p.variants.find((x) => (x.size ?? null) === it.size && (x.color ?? null) === it.color)
+      if (v) { await tx.shopProductVariant.update({ where: { id: v.id }, data: { stock: { increment: it.quantity } } }); touchedVariantProducts.add(p.id) }
+    } else {
+      await tx.shopProduct.update({ where: { id: p.id }, data: { onlineStock: { increment: it.quantity } } })
+    }
+  }
+  for (const pid of touchedVariantProducts) {
+    const agg = await tx.shopProductVariant.aggregate({ where: { shopProductId: pid }, _sum: { stock: true } })
+    await tx.shopProduct.update({ where: { id: pid }, data: { onlineStock: agg._sum.stock ?? 0 } })
+  }
 }

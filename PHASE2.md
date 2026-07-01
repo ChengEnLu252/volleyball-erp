@@ -158,7 +158,10 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   服飾聯名/配件器材/Conti，關鍵字歸類、多屬）；示範原價/特價、多圖、款式庫存。**UI 仍讀記憶體（SC4 再切 DB）**。build 綠。
   ⚠️ 尚未對 DB 重跑 seed（wipe+reseed 由使用者決定時機）。
 - ⏳ **SC2 後台商品管理（admin 風）**：商品 CRUD（新增/編輯、規格矩陣、分類、多圖、上下架、原價/特價）— 目前最大的洞。
-- ⏳ **SC3 後台訂單管理（admin 風）**：訂單列表(狀態/搜尋)＋詳情狀態流(待付→已付→出貨→完成/取消/退貨＋物流欄位)接 DB。
+- ✅ **SC3 後台訂單管理（本輪完成）**：`/orders` 全頁接 DB。`getOrdersForUserAsync`（owner 全部／manager 自館到館自取單，scope 過濾）
+  + `getOrderCountsForUserAsync` + `getShopInventoryAsync`；actions `orders-admin.ts`：標記已付款／完成（宅配可填物流單號→trackingNumber/shippedAt）／
+  取消（交易內 `restockOrderItemsAsync` 回補庫存）／調庫存／上下架／代客下單（channel=backend）。下單邏輯抽成共用
+  `createShopOrderAsync`（前台結帳＋後台代客共用）。build 綠 + 探針（3 seed 單 join 正確）。**閉環：前台下單即現後台。**
 - ⏳ **SC4 前台改版（storefront 視覺）**：首頁 hero＋分類導覽＋商品格狀；商品卡(原價劃線/特價/售罄徽章)；詳情多圖＋規格；讀 DB。保留粉紅。
 - ⏳ **SC5 前台結帳+會員**：購物車→結帳→下單寫 DB(樂觀鎖扣庫存)＋訂單確認＋會員/訂單查詢。
 - ⏳ **SC6 接口收尾**：金流/物流/發票/優惠券留接口；**批次下載真圖自存**（脫離 Cyberbiz CDN）；catalog 重抓刷新機制。
