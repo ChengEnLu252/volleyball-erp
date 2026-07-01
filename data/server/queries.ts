@@ -21,7 +21,10 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
-import type { StoreColor, StoreVariant, StoreCategory, StoreProduct } from '@/data/shop-types'
+import type {
+  StoreColor, StoreVariant, StoreCategory, StoreProduct,
+  OrderView, OrderItemView, ShippingInfoView, FulfillmentType, PaymentChannel, OrderStatus,
+} from '@/data/shop-types'
 import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
   SkillLevel, SessionStatus, SeasonRentalStatus,
@@ -2290,4 +2293,71 @@ export async function getShopProductViewAsync(id: string): Promise<StoreProduct 
   })
   if (!p || !p.isListed) return null
   return mapStoreProduct(p)
+}
+
+
+// ============================================================
+// SC5 — 結帳 / 訂單（公開）
+// ------------------------------------------------------------
+// 結帳頁資料（解析購物車商品 + 取貨球館）、訂單檢視、訂單查詢。
+// 下單寫入（扣庫存 + 建單）在 app/actions/shop.ts 的 placeOrderAction。
+// ============================================================
+
+/** 結帳頁：把購物車的 productId 解析成商品 + 提供可取貨球館。 */
+export async function getCheckoutDataAsync(productIds: string[]): Promise<{ venues: { id: string; name: string }[]; products: StoreProduct[] }> {
+  const ids = [...new Set(productIds)].filter(Boolean)
+  const [venues, products] = await Promise.all([
+    prisma.venue.findMany({ where: { isActive: true }, orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    ids.length
+      ? prisma.shopProduct.findMany({
+          where: { id: { in: ids } },
+          include: { images: true, variants: true, categories: { include: { category: true } } },
+        })
+      : Promise.resolve([]),
+  ])
+  return { venues, products: products.map(mapStoreProduct) }
+}
+
+type OrderWithItems = Prisma.OrderGetPayload<{ include: { items: true } }>
+
+function mapOrderView(o: OrderWithItems, pickupVenueName: string | null): OrderView {
+  const items: OrderItemView[] = [...o.items].map((it) => ({
+    productId: it.productId, name: it.name, unitPrice: it.unitPrice, quantity: it.quantity,
+    subtotal: it.subtotal, size: it.size, color: it.color, imageUrl: it.imageUrl,
+  }))
+  return {
+    id: o.id, orderNo: o.orderNo, status: o.status as OrderStatus,
+    customerName: o.customerName, customerPhone: o.customerPhone, customerEmail: o.customerEmail,
+    itemTotal: o.itemTotal, shippingFee: o.shippingFee, total: o.total,
+    fulfillment: o.fulfillment as FulfillmentType,
+    pickupVenueId: o.pickupVenueId, pickupVenueName,
+    shipping: (o.shipping as unknown as ShippingInfoView | null) ?? null,
+    paymentChannel: o.paymentChannel as PaymentChannel,
+    notes: o.notes, createdAt: o.createdAt.toISOString(),
+    items,
+  }
+}
+
+async function pickupVenueName(venueId: string | null): Promise<string | null> {
+  if (!venueId) return null
+  const v = await prisma.venue.findUnique({ where: { id: venueId }, select: { name: true } })
+  return v?.name ?? null
+}
+
+/** 訂單檢視（確認頁）。 */
+export async function getOrderViewAsync(id: string): Promise<OrderView | null> {
+  if (!id) return null
+  const o = await prisma.order.findUnique({ where: { id }, include: { items: true } })
+  if (!o) return null
+  return mapOrderView(o, await pickupVenueName(o.pickupVenueId))
+}
+
+/** 訂單查詢（會員 lite）：單號 + 電話 雙重比對。 */
+export async function lookupOrderViewAsync(orderNo: string, phone: string): Promise<OrderView | null> {
+  const no = orderNo.trim()
+  const ph = phone.trim()
+  if (!no || !ph) return null
+  const o = await prisma.order.findFirst({ where: { orderNo: no, customerPhone: ph }, include: { items: true } })
+  if (!o) return null
+  return mapOrderView(o, await pickupVenueName(o.pickupVenueId))
 }

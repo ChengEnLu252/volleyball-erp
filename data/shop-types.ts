@@ -27,3 +27,56 @@ export type StoreProduct = {
   variants: StoreVariant[]
   categories: StoreCategory[]
 }
+
+// —— 訂單（SC5：結帳 / 確認 / 查詢）——
+export type FulfillmentType = 'pickup' | 'shipping'
+export type PaymentChannel = 'cash_on_pickup' | 'cash_on_delivery' | 'online_gateway'
+export type OrderStatus = 'pending' | 'paid' | 'fulfilled' | 'cancelled'
+
+export type ShippingInfoView = { recipient: string; phone: string; address: string }
+
+export type OrderItemView = {
+  productId: string
+  name: string
+  unitPrice: number
+  quantity: number
+  subtotal: number
+  size: string | null
+  color: string | null
+  imageUrl: string | null
+}
+
+export type OrderView = {
+  id: string
+  orderNo: string
+  status: OrderStatus
+  customerName: string
+  customerPhone: string
+  customerEmail: string | null
+  itemTotal: number
+  shippingFee: number
+  total: number
+  fulfillment: FulfillmentType
+  pickupVenueId: string | null
+  pickupVenueName: string | null
+  shipping: ShippingInfoView | null
+  paymentChannel: PaymentChannel
+  notes: string | null
+  createdAt: string
+  items: OrderItemView[]
+}
+
+/** 結帳送出的輸入 */
+export type PlaceOrderInput = {
+  customerName: string
+  customerPhone: string
+  customerEmail: string | null
+  items: { productId: string; quantity: number; size: string | null; color: string | null }[]
+  fulfillment: FulfillmentType
+  pickupVenueId: string | null
+  shipping: ShippingInfoView | null
+  paymentChannel: PaymentChannel
+  notes: string | null
+}
+
+export const SHOP_SHIPPING_FEE = 80

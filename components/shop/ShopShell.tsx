@@ -104,7 +104,14 @@ export default function ShopShell({ breadcrumb, hideCart, children }: Props) {
                 }}>VOLLEYOPS SHOP</span>
               </span>
             </Link>
-            {!hideCart && <CartButton />}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Link href="/shop/orders" style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5, padding: '8px 12px', borderRadius: BOOKING_RADIUS.pill,
+                background: BOOKING_COLORS.bgSecondary, color: BOOKING_COLORS.textSecondary, textDecoration: 'none',
+                fontSize: 13, fontWeight: 700, border: `1px solid ${BOOKING_COLORS.border}`, whiteSpace: 'nowrap',
+              }}>🔎 <span>訂單查詢</span></Link>
+              {!hideCart && <CartButton />}
+            </div>
           </div>
           {breadcrumb && (
             <div style={{
