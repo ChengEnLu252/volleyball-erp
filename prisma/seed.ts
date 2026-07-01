@@ -313,12 +313,18 @@ async function main() {
     }),
   )
 
-  // 規格：只有「有色/尺寸軸」的商品才建 variant 列；單一款商品用 onlineStock
-  const variantRows = catalog.filter(hasAxes).flatMap((it) =>
-    it.variants.map((v) => ({
-      shopProductId: pid(it), size: v.size, color: v.color, stock: v.stock, sku: v.sku,
-    })),
-  )
+  // 規格：只有「有色/尺寸軸」的商品才建 variant 列；單一款商品用 onlineStock。
+  // 去重 (shopProductId,size,color)：對方後台偶有重複組合 → 合併庫存、保留首個 SKU。
+  const variantMap = new Map<string, { shopProductId: string; size: string | null; color: string | null; stock: number; sku: string | null }>()
+  for (const it of catalog.filter(hasAxes)) {
+    for (const v of it.variants) {
+      const k = `${pid(it)}|${v.size ?? ''}|${v.color ?? ''}`
+      const cur = variantMap.get(k)
+      if (cur) cur.stock += v.stock
+      else variantMap.set(k, { shopProductId: pid(it), size: v.size, color: v.color, stock: v.stock, sku: v.sku })
+    }
+  }
+  const variantRows = [...variantMap.values()]
   await insertChunked('shopProductVariants', variantRows, (c) => prisma.shopProductVariant.createMany({ data: c }))
 
   const imageRows = catalog.flatMap((it) =>
