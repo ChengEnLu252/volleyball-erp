@@ -24,6 +24,16 @@ const STATUS_COLOR: Record<string, { bg: string; text: string }> = {
   cancelled: { bg: '#fee2e2', text: '#991b1b' }, completed: { bg: '#f3f4f6', text: '#6b7280' },
 }
 
+const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
+/** 'YYYY-MM-DD' → { title:'1/5（週四）', rel:'今天'|'明天'|null } */
+function fmtDateHeader(dateStr: string): { title: string; rel: string | null } {
+  const d = new Date(dateStr + 'T00:00:00')
+  const today = new Date(); today.setHours(0, 0, 0, 0)
+  const diff = Math.round((d.getTime() - today.getTime()) / 86400000)
+  const rel = diff === 0 ? '今天' : diff === 1 ? '明天' : null
+  return { title: `${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）`, rel }
+}
+
 export default function SessionsClient({
   sessions, venues, canCreate,
 }: {
@@ -42,6 +52,16 @@ export default function SessionsClient({
     if (selectedType !== 'all') result = result.filter(s => s.sessionType === selectedType)
     return result
   }, [sessions, selectedVenueId, selectedType])
+
+  // 依日期分組（已排序）→ 每組一個日期標頭，解決「只有時間、一團亂」
+  const groups = useMemo(() => {
+    const m = new Map<string, Session[]>()
+    for (const s of filtered) {
+      const arr = m.get(s.sessionDate)
+      if (arr) arr.push(s); else m.set(s.sessionDate, [s])
+    }
+    return [...m.entries()]
+  }, [filtered])
 
   return (
     <div style={{ padding: 24 }}>
@@ -72,8 +92,20 @@ export default function SessionsClient({
         </select>
       </div>
 
-      <div style={{ display: 'grid', gap: 10 }}>
-        {filtered.map(session => (
+      <div style={{ display: 'grid', gap: 18 }}>
+        {groups.map(([date, daySessions]) => {
+          const { title, rel } = fmtDateHeader(date)
+          return (
+            <div key={date}>
+              {/* 日期標頭 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 2px 8px' }}>
+                <span style={{ fontSize: 14, fontWeight: 700, color: '#1a1917' }}>{title}</span>
+                {rel && <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 8, background: rel === '今天' ? '#dcfce7' : '#e0f2fe', color: rel === '今天' ? '#166534' : '#0369a1' }}>{rel}</span>}
+                <span style={{ flex: 1, height: 1, background: '#f0ede6' }} />
+                <span style={{ fontSize: 11, color: '#bbb' }}>{daySessions.length} 場</span>
+              </div>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {daySessions.map(session => (
           <a key={session.id} href={`/sessions/${session.id}`} style={{ textDecoration: 'none', color: 'inherit' }}>
             <div style={{ background: '#fff', borderRadius: 12, border: '1px solid #e8e6e0', padding: '16px 20px', display: 'flex', alignItems: 'center', gap: 16, cursor: 'pointer', flexWrap: 'wrap' }}
               onMouseEnter={e => (e.currentTarget.style.borderColor = '#aaa')}
@@ -119,7 +151,11 @@ export default function SessionsClient({
               <span style={{ color: '#ccc', fontSize: 18 }}>›</span>
             </div>
           </a>
-        ))}
+                ))}
+              </div>
+            </div>
+          )
+        })}
         {filtered.length === 0 && (
           <div style={{ background: '#fff', border: '1px dashed #e8e6e0', borderRadius: 12, padding: '40px 20px', textAlign: 'center', color: '#aaa', fontSize: 14 }}>
             這個範圍內沒有場次

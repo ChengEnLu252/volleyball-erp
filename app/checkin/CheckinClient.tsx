@@ -18,6 +18,13 @@ const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'A+': { bg: '#fce7f3', text: '#9d174d' }, 'S':  { bg: '#f3e8ff', text: '#6b21a8' }, 'S*': { bg: '#1a1917', text: '#d4a843' },
 }
 const METHOD_LABEL: Record<string, string> = { cash: '現金', transfer: '轉帳', online: '線上' }
+const WEEKDAY = ['日', '一', '二', '三', '四', '五', '六']
+/** 'YYYY-MM-DD' → '2026/7/1（週三）' */
+function fmtCheckinDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T00:00:00')
+  if (Number.isNaN(d.getTime())) return dateStr
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}（週${WEEKDAY[d.getDay()]}）`
+}
 
 export default function CheckinClient({ data }: { data: CheckinBundle }) {
   const router = useRouter()
@@ -82,7 +89,7 @@ export default function CheckinClient({ data }: { data: CheckinBundle }) {
 
       {!data.isToday && (
         <div style={{ background: '#fff7ed', border: '1px solid #fb923c', borderRadius: 10, padding: '8px 12px', marginBottom: 12, fontSize: 12, color: '#9a3412' }}>
-          今天沒有場次，顯示最近有場次的日期：<strong>{data.date}</strong>
+          今天沒有場次，顯示最近有場次的日期：<strong>{fmtCheckinDate(data.date)}</strong>
         </div>
       )}
 
@@ -103,7 +110,7 @@ export default function CheckinClient({ data }: { data: CheckinBundle }) {
 
       {/* 場次資訊卡 */}
       <div style={{ background: '#1a1917', color: '#fff', borderRadius: 14, padding: '18px 20px', marginBottom: 16 }}>
-        <div style={{ fontSize: 11, color: '#888', marginBottom: 4 }}>{data.date} · 目前場次</div>
+        <div style={{ fontSize: 13, color: '#d4a843', fontWeight: 700, marginBottom: 4 }}>📅 {fmtCheckinDate(data.date)}</div>
         <div style={{ fontSize: 18, fontWeight: 700 }}>{session.venueName} · {session.startTime}–{session.endTime}</div>
         <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
           <Stat value={attendedCount} label="已報到" color="#d4a843" />
