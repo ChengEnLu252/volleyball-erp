@@ -8,6 +8,7 @@ import { useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { collectPaymentAction, undoPaymentAction } from '@/app/actions/payments'
 import { setAttendanceAction } from '@/app/actions/checkin'
+import { finalizeSessionViolationsAction } from '@/app/actions/blacklist'
 import { REGISTRATION_TYPE_LABEL } from '@/types'
 import type { PaymentMethod } from '@/types'
 import type { CheckinBundle } from '@/data/server/queries'
@@ -78,6 +79,15 @@ export default function CheckinClient({ data }: { data: CheckinBundle }) {
     if (!res.ok) { showToast(`⚠️ ${res.reason}`); return }
     showToast(attended ? '✓ 已報到' : '取消報到'); router.refresh()
   }
+  const handleFinalize = async () => {
+    if (!confirm('結算本場違規？未報到→記「未到場」、到場未付款→記「未付款」（各記一次違規，累計 3 次自動列黑名單）。')) return
+    setBusyId('__finalize__')
+    const res = await finalizeSessionViolationsAction(session.id)
+    setBusyId(null)
+    if (!res.ok) { showToast(`⚠️ ${res.reason}`); return }
+    showToast(`已結算：未到場 ${res.noShow}、未付款 ${res.unpaid}${res.newBans ? `、新增黑名單 ${res.newBans}` : ''}`)
+    router.refresh()
+  }
 
   return (
     <div style={{ padding: 20, maxWidth: 680, margin: '0 auto' }}>
@@ -118,6 +128,9 @@ export default function CheckinClient({ data }: { data: CheckinBundle }) {
           <Stat value={unpaidCount} label="未收款" color={unpaidCount > 0 ? '#e85d3a' : '#10b981'} />
           <Stat value={Math.max(0, session.maxCapacity - regs.length)} label="剩餘名額" color="#fff" />
         </div>
+        <button onClick={handleFinalize} disabled={busyId === '__finalize__'} style={{ marginTop: 14, padding: '9px 14px', borderRadius: 9, border: '1px solid #444', background: 'transparent', color: '#e0ddd4', fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>
+          {busyId === '__finalize__' ? '結算中…' : '⚖️ 結算場次違規（未到場 / 未付款）'}
+        </button>
       </div>
 
       {/* 名單 */}

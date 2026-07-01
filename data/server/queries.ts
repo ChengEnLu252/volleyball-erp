@@ -239,7 +239,12 @@ export async function getCustomersForUserAsync(scope: UserScope): Promise<Custom
       ? {}
       : { registrations: { some: { session: venueWhere(scope.visibleVenueIds) } } }
   const rows = await prisma.customer.findMany({ where, orderBy: { name: 'asc' } })
-  return rows.map(mapCustomer)
+  const stats = await getViolationStatsForCustomersAsync(rows.map((r) => r.id))
+  return rows.map((r) => {
+    const c = mapCustomer(r)
+    const s = stats.get(r.id)
+    return { ...c, bannedAt: iso(r.bannedAt), banReason: r.banReason, activeViolations: s?.count ?? 0, owedAmount: s?.owed ?? 0 }
+  })
 }
 
 export async function getCustomerByIdForUserAsync(scope: UserScope, id: string): Promise<Customer | null> {
@@ -2600,4 +2605,94 @@ export async function getShopAdminProductAsync(id: string): Promise<StoreProduct
 export async function getAllShopCategoriesAsync(): Promise<StoreCategory[]> {
   const cats = await prisma.shopCategory.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } })
   return cats.map((c) => ({ id: c.id, name: c.name, slug: c.slug }))
+}
+
+
+// ============================================================
+// 黑名單 / 違規（累計 3 次未解除 → 自動列黑名單；七館同步）
+// ============================================================
+
+export const BLACKLIST_THRESHOLD = 3
+
+/** 某客戶未解除(active)違規統計 */
+async function activeViolationStat(customerId: string): Promise<{ count: number; owed: number }> {
+  const agg = await prisma.customerViolation.aggregate({
+    where: { customerId, resolvedAt: null },
+    _count: true, _sum: { amount: true },
+  })
+  return { count: agg._count, owed: agg._sum.amount ?? 0 }
+}
+
+/**
+ * 記一次違規 → 若跨過門檻自動列黑名單 + 入 LINE 通知佇列。
+ * 冪等：同 (customerId, sessionId, type) 已存在則不重複記（sessionId 為 null 的手動違規不去重）。
+ * 回傳 { recorded, banned, count, owed }。
+ */
+export async function recordCustomerViolationAsync(args: {
+  customerId: string
+  venueId: string | null
+  type: 'no_show' | 'unpaid' | 'manual'
+  reason?: string | null
+  sessionId?: string | null
+  amount?: number
+  createdBy?: string | null
+}): Promise<{ recorded: boolean; banned: boolean; count: number; owed: number }> {
+  if (args.sessionId) {
+    const dup = await prisma.customerViolation.findFirst({
+      where: { customerId: args.customerId, sessionId: args.sessionId, type: args.type },
+      select: { id: true },
+    })
+    if (dup) { const s = await activeViolationStat(args.customerId); return { recorded: false, banned: false, ...s } }
+  }
+  await prisma.customerViolation.create({
+    data: {
+      customerId: args.customerId, venueId: args.venueId ?? null, type: args.type,
+      reason: args.reason ?? null, sessionId: args.sessionId ?? null,
+      amount: Math.max(0, Math.round(args.amount ?? 0)), createdBy: args.createdBy ?? null,
+    },
+  })
+  const stat = await activeViolationStat(args.customerId)
+  let banned = false
+  if (stat.count >= BLACKLIST_THRESHOLD) {
+    const c = await prisma.customer.findUnique({ where: { id: args.customerId }, select: { isBanned: true, name: true } })
+    if (c && !c.isBanned) {
+      banned = true
+      await prisma.customer.update({
+        where: { id: args.customerId },
+        data: { isBanned: true, bannedAt: new Date(), banReason: `累計 ${stat.count} 次違規` },
+      })
+      await prisma.lineNotification.create({
+        data: {
+          customerId: args.customerId, venueId: args.venueId ?? null, type: 'blacklist',
+          title: '報名資格暫停通知',
+          body: `您因累計 ${stat.count} 次違規（含未到場／欠費），已被暫停報名資格。應繳清金額 $${stat.owed}，繳清後即可恢復報名。詳情請洽本館官方帳號。`,
+          owedAmount: stat.owed, status: 'pending',
+        },
+      })
+    }
+  }
+  return { recorded: true, banned, ...stat }
+}
+
+/** 多客戶的 active 違規統計（客戶列表用） */
+export async function getViolationStatsForCustomersAsync(customerIds: string[]): Promise<Map<string, { count: number; owed: number }>> {
+  const ids = [...new Set(customerIds)].filter(Boolean)
+  const m = new Map<string, { count: number; owed: number }>()
+  if (!ids.length) return m
+  const rows = await prisma.customerViolation.groupBy({
+    by: ['customerId'], where: { customerId: { in: ids }, resolvedAt: null },
+    _count: true, _sum: { amount: true },
+  })
+  for (const r of rows) m.set(r.customerId, { count: r._count, owed: r._sum.amount ?? 0 })
+  return m
+}
+
+/** 依電話查是否為黑名單（報名擋用） */
+export async function isPhoneBlacklistedAsync(phone: string): Promise<{ banned: boolean; name?: string; owed?: number; customerId?: string }> {
+  const p = phone.trim()
+  if (!p) return { banned: false }
+  const banned = await prisma.customer.findFirst({ where: { phone: p, isBanned: true }, select: { id: true, name: true } })
+  if (!banned) return { banned: false }
+  const stat = await activeViolationStat(banned.id)
+  return { banned: true, name: banned.name, owed: stat.owed, customerId: banned.id }
 }

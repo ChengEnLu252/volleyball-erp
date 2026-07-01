@@ -133,18 +133,78 @@ model Customer {
   preferredNetHeight NetHeight?  @map("preferred_net_height")
   gender             Gender?
   notes              String?
+  /// 黑名單（累計 3 次未解除違規自動列入；七館同步＝單一客戶記錄）
   isBanned           Boolean     @default(false) @map("is_banned")
+  bannedAt           DateTime?   @map("banned_at")
+  banReason          String?     @map("ban_reason")
   createdAt          DateTime    @default(now()) @map("created_at")
 
   // 關聯
   registrations        Registration[]
   productTransactions  ProductTransaction[]
+  violations           CustomerViolation[]
   /**
    * 此客戶擔任主揪的所有季租單
    */
   captainSeasonRentals SeasonRental[]
 
   @@map("customers")
+}
+
+// ── 客戶違規（累計 3 次未解除 → 黑名單）─────────────────────────────
+model CustomerViolation {
+  id         String        @id @default(uuid())
+  customerId String        @map("customer_id")
+  /// 違反哪一館的規則（七館共用黑名單，但記錄違規發生館）
+  venueId    String?       @map("venue_id")
+  type       ViolationType
+  reason     String?
+  sessionId  String?       @map("session_id")
+  /// 該違規產生的欠費（元）；繳清即解除
+  amount     Int           @default(0)
+  /// 手動記錄的操作員；系統自動偵測為 null
+  createdBy  String?       @map("created_by")
+  /// 繳清 / 解除時間 → 不再計入 active 計數
+  resolvedAt DateTime?     @map("resolved_at")
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, resolvedAt])
+  @@map("customer_violations")
+}
+
+enum ViolationType {
+  no_show
+  unpaid
+  manual
+}
+
+// ── LINE 通知佇列（官方 API 未接前先入列，憑證到再自動發）──────────────
+model LineNotification {
+  id         String                 @id @default(uuid())
+  customerId String                 @map("customer_id")
+  venueId    String?                @map("venue_id")
+  type       LineNotificationType
+  title      String
+  body       String
+  owedAmount Int                    @default(0) @map("owed_amount")
+  status     LineNotificationStatus @default(pending)
+  createdAt  DateTime               @default(now()) @map("created_at")
+  sentAt     DateTime?              @map("sent_at")
+
+  @@index([status])
+  @@map("line_notifications")
+}
+
+enum LineNotificationType {
+  blacklist
+}
+
+enum LineNotificationStatus {
+  pending
+  sent
+  failed
 }
 
 /// 排球程度評級。

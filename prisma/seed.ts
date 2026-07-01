@@ -72,6 +72,8 @@ async function main() {
 
   // ── 1. 清空（反向 FK 順序，確保可重複執行）──────────────────
   console.log('清空既有資料...')
+  await prisma.lineNotification.deleteMany()
+  await prisma.customerViolation.deleteMany()
   await prisma.orderItem.deleteMany()
   await prisma.order.deleteMany()
   await prisma.shopProductCategory.deleteMany()

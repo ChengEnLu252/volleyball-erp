@@ -190,8 +190,11 @@ export function cancelMyBooking(lineUserId: string, bookingId: string): boolean 
   return true
 }
 
+/** 取消截止：開場前幾小時內禁止自行取消 */
+export const CANCEL_LOCK_HOURS = 12
+
 /**
- * 取消是否合法：開場前 24H 才可自行取消（舊系統規則）。
+ * 取消是否合法：開場前 12 小時內「禁止取消」（硬擋）。
  * 回傳 { ok, reason } 給 UI 用。
  */
 export function canCancelBooking(item: MyBookingItem): { ok: boolean; reason?: string } {
@@ -201,10 +204,10 @@ export function canCancelBooking(item: MyBookingItem): { ok: boolean; reason?: s
   const now = new Date()
   const sessionStart = new Date(`${item.sessionDate}T${item.startTime}:00`)
   const diffHours = (sessionStart.getTime() - now.getTime()) / (1000 * 60 * 60)
-  if (diffHours < 24) {
+  if (diffHours < CANCEL_LOCK_HOURS) {
     return {
       ok: false,
-      reason: '開場前 24 小時內不可自行取消，請私訊官方帳號協助處理',
+      reason: `開場前 ${CANCEL_LOCK_HOURS} 小時內不可取消，未到場將列為缺席（違規）。如需協助請洽官方帳號。`,
     }
   }
   return { ok: true }

@@ -63,6 +63,7 @@ const ALL_LINKS: NavLink[] = [
   { pageKey: 'booking-overview', href: '/booking-overview', label: '報名熱度',     icon: '📈', group: 'ops' },
   { pageKey: 'checkin',          href: '/checkin',          label: '前台操作',     icon: '✓',  group: 'ops' },
   { pageKey: 'customers',        href: '/customers',        label: '客戶資料',     icon: '👤', group: 'ops' },
+  { pageKey: 'blacklist',        href: '/blacklist',        label: '黑名單',       icon: '🚫', group: 'ops' },
   // 商品 / 商城
   { pageKey: 'products',         href: '/products',         label: '商品管理',     icon: '📦', group: 'commerce' },
   { pageKey: 'shop-products',    href: '/shop-products',    label: '商城商品',     icon: '🏷️', group: 'commerce' },

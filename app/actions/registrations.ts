@@ -18,6 +18,7 @@ import type { Gender, SkillLevel } from '@/types'
 import { averageSkillLevel, type FourSkills } from '@/data/skill'
 import {
   getBookingDatesWithSessionsAsync, getBookingSessionsByDateAsync, getPublicSessionAsync,
+  isPhoneBlacklistedAsync,
 } from '@/data/server/queries'
 import type { PublicSession } from '@/data/api'
 
@@ -98,6 +99,12 @@ export async function submitPublicBooking(input: BookingInput): Promise<BookingR
   const session = await prisma.session.findUnique({ where: { id: input.sessionId } })
   if (!session) return { ok: false, error: '找不到場次' }
   if (session.status === 'cancelled') return { ok: false, error: '此場次已取消' }
+
+  // 黑名單擋報名（七館同步）：此號碼列入黑名單且未繳清 → 不得報名
+  const bl = await isPhoneBlacklistedAsync(phone)
+  if (bl.banned) {
+    return { ok: false, error: `此號碼已被暫停報名資格${bl.owed ? `（應繳清 $${bl.owed}）` : ''}，請洽官方帳號繳清後恢復。` }
+  }
 
   // 手機重複 → 需前端三選一
   const existing = await lookupCustomersByPhone(phone)

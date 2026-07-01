@@ -48,6 +48,8 @@ export type PageKey =
   | 'orders'
   // SC2：線上商城商品管理（新增/編輯/規格/分類/圖）
   | 'shop-products'
+  // 黑名單 / 違規管理
+  | 'blacklist'
   // Round 5C：帳號審核（自助註冊者，僅 owner）
   | 'approvals'
 
@@ -72,6 +74,7 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'notifications':    '通知',
   'orders':           '商城訂單',
   'shop-products':    '商城商品',
+  'blacklist':        '黑名單',
   'approvals':        '帳號審核',
 }
 
@@ -139,6 +142,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'orders':           { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   // SC2：商城商品管理 — owner / manager 可管理單一商城；staff 擋
   'shop-products':    { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // 黑名單 — owner / manager 皆可管理（七館同步）；staff 擋
+  'blacklist':        { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   // Round 5C：帳號審核 — 僅 owner
   'approvals':        { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
 }
@@ -218,6 +223,7 @@ export function pathToPageKey(path: string): PageKey | null {
     ['notifications',    '/notifications'],
     ['goals',            '/goals'],
     ['shop-products',    '/shop-products'],
+    ['blacklist',        '/blacklist'],
     ['orders',           '/orders'],
     ['dashboard',        '/dashboard'],
     ['sessions',         '/sessions'],

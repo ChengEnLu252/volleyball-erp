@@ -189,13 +189,20 @@ export interface Customer {
   gender?: Gender | null
   /** 客戶備註（館長記錄用，例：「態度好」、「常遲到」） */
   notes: string | null
-  /** 是否被禁止報名 */
+  /** 是否被禁止報名（黑名單；七館同步） */
   isBanned: boolean
+  /** 黑名單時間 / 原因 */
+  bannedAt?: Timestamp | null
+  banReason?: string | null
   /** 建立時間 */
   createdAt: Timestamp
   // ── 衍生欄位（查詢時 join，不存入資料表）───────────
   /** 衍生：此客戶目前是否擁有 active 的 SeasonRental（主揪） */
   isActiveCaptain?: boolean
+  /** 衍生：未解除違規次數（累計 3 次 → 黑名單） */
+  activeViolations?: number
+  /** 衍生：未繳清欠費（元） */
+  owedAmount?: number
 }
 
 

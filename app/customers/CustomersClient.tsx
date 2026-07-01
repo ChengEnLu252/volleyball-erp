@@ -130,7 +130,18 @@ export default function CustomersClient({
                     {c.name[0]}
                   </div>
                   <div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>{c.name}</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      {c.name}
+                      {c.isBanned ? (
+                        <span title={c.banReason ?? '黑名單'} style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, background: '#fee2e2', color: '#991b1b' }}>
+                          🚫 黑名單{c.owedAmount ? ` · 欠 $${c.owedAmount}` : ''}
+                        </span>
+                      ) : (c.activeViolations ?? 0) > 0 ? (
+                        <span title="未解除違規" style={{ fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 6, background: '#fef3c7', color: '#92400e' }}>
+                          違規 {c.activeViolations}/3
+                        </span>
+                      ) : null}
+                    </div>
                     <div style={{ fontSize: 11, color: '#aaa' }}>{c.phone}</div>
                   </div>
                 </div>
