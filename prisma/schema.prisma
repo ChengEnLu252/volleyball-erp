@@ -123,7 +123,13 @@ model Customer {
   // 電話不再唯一：允許「同號碼新增為不同人」（報名自助建檔的三選一之一）
   phone              String?     @db.VarChar(20)
   email              String?     @db.VarChar(255)
+  /// 綜合程度 = 四項自評的平均（四捨五入到最近一級）。無四項資料時為原單一自評。
   skillLevel         SkillLevel? @map("skill_level")
+  /// 報名時四項能力自評（攻擊/防守/舉球/攔網）；舊資料為 null → 顯示回退到 skillLevel
+  skillAttack        SkillLevel? @map("skill_attack")
+  skillDefense       SkillLevel? @map("skill_defense")
+  skillSetting       SkillLevel? @map("skill_setting")
+  skillBlock         SkillLevel? @map("skill_block")
   preferredNetHeight NetHeight?  @map("preferred_net_height")
   gender             Gender?
   notes              String?

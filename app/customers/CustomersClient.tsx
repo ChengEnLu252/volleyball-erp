@@ -5,8 +5,20 @@
 
 import { useMemo, useState } from 'react'
 import type { Customer } from '@/types'
+import { skillRangeLabel, averageSkillLevel, type FourSkills } from '@/data/skill'
 
 type Stat = { sessions: number; amount: number; lastVisit: string | null }
+
+/** 客戶四項能力 → { 顯示標籤(區間/準確值), 顏色用單一級, 是否為四項平均 } */
+function skillDisplay(c: Customer): { label: string | null; colorKey: string | null; isAverage: boolean } {
+  const four: FourSkills = {
+    attack: c.skillAttack ?? null, defense: c.skillDefense ?? null,
+    setting: c.skillSetting ?? null, block: c.skillBlock ?? null,
+  }
+  const range = skillRangeLabel(four)
+  if (range) return { label: range, colorKey: averageSkillLevel(four) ?? c.skillLevel, isAverage: true }
+  return { label: c.skillLevel, colorKey: c.skillLevel, isAverage: false } // 舊資料回退
+}
 
 const SKILL_COLOR: Record<string, { bg: string; text: string }> = {
   'E':  { bg: '#f1f5f9', text: '#64748b' },
@@ -103,15 +115,17 @@ export default function CustomersClient({
 
           {filtered.map(c => {
             const stat = stats[c.id] ?? { sessions: 0, amount: 0, lastVisit: null }
+            const skill = skillDisplay(c)
+            const clr = skill.colorKey ? SKILL_COLOR[skill.colorKey] : null
             return (
               <div key={c.id} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px 80px 100px', padding: '14px 20px', borderTop: '1px solid #f5f4f0', alignItems: 'center', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: 10, flexShrink: 0,
-                    background: c.skillLevel ? SKILL_COLOR[c.skillLevel].bg : '#f5f4f0',
+                    background: clr ? clr.bg : '#f5f4f0',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 14, fontWeight: 700,
-                    color: c.skillLevel ? SKILL_COLOR[c.skillLevel].text : '#888',
+                    color: clr ? clr.text : '#888',
                   }}>
                     {c.name[0]}
                   </div>
@@ -122,12 +136,14 @@ export default function CustomersClient({
                 </div>
 
                 <div>
-                  {c.skillLevel && (
+                  {skill.label && clr && (
                     <div>
-                      <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: SKILL_COLOR[c.skillLevel].bg, color: SKILL_COLOR[c.skillLevel].text }}>
-                        {c.skillLevel}
+                      <span style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: clr.bg, color: clr.text, whiteSpace: 'nowrap' }}>
+                        {skill.label}
                       </span>
-                      <div style={{ fontSize: 10, color: '#aaa', marginTop: 3 }}>{SKILL_DESC[c.skillLevel]}</div>
+                      <div style={{ fontSize: 10, color: '#aaa', marginTop: 3 }}>
+                        {skill.isAverage ? '四項平均' : (skill.label ? SKILL_DESC[skill.label] : '')}
+                      </div>
                     </div>
                   )}
                 </div>

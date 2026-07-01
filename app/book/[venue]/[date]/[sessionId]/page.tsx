@@ -153,6 +153,12 @@ export default function SessionDetailPage({ params, searchParams }: {
       phone: phone.trim(),
       gender,
       skillLevel: overallSkill(skills),
+      skills: {
+        attack: normSkill(skills.attack),
+        defense: normSkill(skills.defense),
+        setting: normSkill(skills.setting),
+        block: normSkill(skills.block),
+      },
       resolution,
       existingCustomerId,
     })

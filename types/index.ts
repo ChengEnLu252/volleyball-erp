@@ -176,8 +176,13 @@ export interface Customer {
   phone: string | null
   /** Email，可空 */
   email: string | null
-  /** 程度標籤（由館長核定） */
+  /** 綜合程度 = 四項自評平均（四捨五入到最近一級）；無四項時為原單一自評 */
   skillLevel: SkillLevel | null
+  /** 報名四項能力自評（攻擊/防守/舉球/攔網）；舊資料為 null → 顯示回退到 skillLevel */
+  skillAttack?: SkillLevel | null
+  skillDefense?: SkillLevel | null
+  skillSetting?: SkillLevel | null
+  skillBlock?: SkillLevel | null
   /** 偏好網高 */
   preferredNetHeight: NetHeight | null
   /** 性別（報名自助建檔用；可不透露。舊資料可能無此欄位）*/

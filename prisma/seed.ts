@@ -131,12 +131,30 @@ async function main() {
   )
 
   // §D 客戶（phone 不再 unique → 不去重；gender 種子未提供，預設 null）
-  const customerRows = GENERATED.customers.map((cust) => ({
-    id: cust.id, name: cust.name, phone: cust.phone, email: cust.email,
-    skillLevel: skill(cust.skillLevel) as never,
-    preferredNetHeight: cust.preferredNetHeight,
-    notes: cust.notes, isBanned: cust.isBanned, createdAt: dt(cust.createdAt)!,
-  }))
+  // 四項自評（攻擊/防守/舉球/攔網）：由既有單一程度確定性擴散生成（假資料，
+  // 讓平均/區間顯示有東西可看）；skillLevel 改存四項平均。真資料以報名寫入為準。
+  const SKILL_ORDER = ['E', 'D', 'C', 'B', 'B+', 'A', 'A+', 'S', 'S*']
+  const hashStr = (s: string) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h }
+  const clampIdx = (n: number) => Math.max(0, Math.min(8, n))
+  function fourSkills(base: string | null, id: string): { four: (string | null)[]; avg: string | null } {
+    if (!base || SKILL_ORDER.indexOf(base) < 0) return { four: [null, null, null, null], avg: base }
+    const bi = SKILL_ORDER.indexOf(base)
+    const h = hashStr(id)
+    const idx = [0, 2, 4, 6].map((sh) => clampIdx(bi + (((h >> sh) & 3) - 1))) // 每項 -1~+2
+    const avg = SKILL_ORDER[Math.round(idx.reduce((a, b) => a + b, 0) / 4)]
+    return { four: idx.map((i) => SKILL_ORDER[i]), avg }
+  }
+  const customerRows = GENERATED.customers.map((cust) => {
+    const { four, avg } = fourSkills(cust.skillLevel, cust.id)
+    return {
+      id: cust.id, name: cust.name, phone: cust.phone, email: cust.email,
+      skillLevel: skill(avg) as never,
+      skillAttack: skill(four[0]) as never, skillDefense: skill(four[1]) as never,
+      skillSetting: skill(four[2]) as never, skillBlock: skill(four[3]) as never,
+      preferredNetHeight: cust.preferredNetHeight,
+      notes: cust.notes, isBanned: cust.isBanned, createdAt: dt(cust.createdAt)!,
+    }
+  })
   await insertChunked('customers', customerRows, (c) => prisma.customer.createMany({ data: c }))
 
   // §C 季

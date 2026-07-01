@@ -15,6 +15,7 @@
 import { revalidatePath } from 'next/cache'
 import { prisma } from '@/lib/prisma'
 import type { Gender, SkillLevel } from '@/types'
+import { averageSkillLevel, type FourSkills } from '@/data/skill'
 import {
   getBookingDatesWithSessionsAsync, getBookingSessionsByDateAsync, getPublicSessionAsync,
 } from '@/data/server/queries'
@@ -49,9 +50,28 @@ export type BookingInput = {
   name: string
   phone: string
   gender: Gender | null
+  /** 綜合程度（向後相容）；若有帶 skills 則以 skills 平均為準 */
   skillLevel: SkillLevel | null
+  /** 四項能力自評（攻擊/防守/舉球/攔網）；有帶則存四項 + skillLevel=平均 */
+  skills?: FourSkills | null
   resolution?: 'use_existing' | 'overwrite' | 'create_new'
   existingCustomerId?: string
+}
+
+/** 依 input 決定要寫入客戶的程度欄位（四項 + 綜合平均） */
+function buildSkillData(input: BookingInput): Record<string, string | undefined> {
+  const s = input.skills
+  if (s && (s.attack || s.defense || s.setting || s.block)) {
+    const avg = averageSkillLevel(s) ?? input.skillLevel
+    return {
+      skillLevel: toPrismaSkill(avg),
+      skillAttack: toPrismaSkill(s.attack),
+      skillDefense: toPrismaSkill(s.defense),
+      skillSetting: toPrismaSkill(s.setting),
+      skillBlock: toPrismaSkill(s.block),
+    }
+  }
+  return { skillLevel: toPrismaSkill(input.skillLevel) }
 }
 
 export type BookingResult =
@@ -85,13 +105,13 @@ export async function submitPublicBooking(input: BookingInput): Promise<BookingR
     return { ok: false, needsResolution: true, existing }
   }
 
-  const skillLevel = toPrismaSkill(input.skillLevel) as never | undefined
+  const skillData = buildSkillData(input) as never
   const gender = (input.gender ?? undefined) as never | undefined
 
   // 決定 / 建立客戶
   let customerId: string
   if (existing.length === 0 || input.resolution === 'create_new') {
-    const c = await prisma.customer.create({ data: { name, phone, gender, skillLevel } })
+    const c = await prisma.customer.create({ data: { name, phone, gender, ...(skillData as object) } })
     customerId = c.id
   } else {
     const target =
@@ -99,7 +119,7 @@ export async function submitPublicBooking(input: BookingInput): Promise<BookingR
         ? input.existingCustomerId
         : existing[0].id
     if (input.resolution === 'overwrite') {
-      await prisma.customer.update({ where: { id: target }, data: { name, gender, skillLevel } })
+      await prisma.customer.update({ where: { id: target }, data: { name, gender, ...(skillData as object) } })
     }
     customerId = target
   }
