@@ -65,6 +65,7 @@ const ALL_LINKS: NavLink[] = [
   { pageKey: 'customers',        href: '/customers',        label: '客戶資料',     icon: '👤', group: 'ops' },
   // 商品 / 商城
   { pageKey: 'products',         href: '/products',         label: '商品管理',     icon: '📦', group: 'commerce' },
+  { pageKey: 'shop-products',    href: '/shop-products',    label: '商城商品',     icon: '🏷️', group: 'commerce' },
   { pageKey: 'orders',           href: '/orders',           label: '商城訂單',     icon: '🛒', group: 'commerce' },
   // 財務 / 對帳
   { pageKey: 'finance',          href: '/finance',          label: '財務報表',     icon: '💰', group: 'finance' },

@@ -157,7 +157,11 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   Supabase）。分類走「可自建表＋多對多」。seed 改吃 `lineaone-catalog.json` 真目錄（7 分類：限時團購/排球/籃球/匹克球/
   服飾聯名/配件器材/Conti，關鍵字歸類、多屬）；示範原價/特價、多圖、款式庫存。**UI 仍讀記憶體（SC4 再切 DB）**。build 綠。
   ⚠️ 尚未對 DB 重跑 seed（wipe+reseed 由使用者決定時機）。
-- ⏳ **SC2 後台商品管理（admin 風）**：商品 CRUD（新增/編輯、規格矩陣、分類、多圖、上下架、原價/特價）— 目前最大的洞。
+- ✅ **SC2 後台商品管理（本輪完成）**：新頁 `/shop-products`（權限鍵 `shop-products`，owner/manager，側欄「商城商品」）。
+  `app/actions/shop-admin.ts`：`saveShopProductAction`（新增/編輯：scalar + 重建 images/variants/categories，規格矩陣去重合併、
+  onlineStock=規格加總）、`deleteShopProductAction`（cascade）、`createShopCategoryAction`（可自建分類，slug 去重）。
+  編輯器：名稱/售價/原價/描述/emoji/上下架、分類多選+新增、圖片網址(多張)、尺寸/顏色軸→規格矩陣(各庫存+SKU)。
+  圖片上傳留 SC6（現以網址管理）。build 綠。
 - ✅ **SC3 後台訂單管理（本輪完成）**：`/orders` 全頁接 DB。`getOrdersForUserAsync`（owner 全部／manager 自館到館自取單，scope 過濾）
   + `getOrderCountsForUserAsync` + `getShopInventoryAsync`；actions `orders-admin.ts`：標記已付款／完成（宅配可填物流單號→trackingNumber/shippedAt）／
   取消（交易內 `restockOrderItemsAsync` 回補庫存）／調庫存／上下架／代客下單（channel=backend）。下單邏輯抽成共用

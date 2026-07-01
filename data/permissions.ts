@@ -46,6 +46,8 @@ export type PageKey =
   | 'notifications'
   // 階段 17：線上商城後台訂單管理
   | 'orders'
+  // SC2：線上商城商品管理（新增/編輯/規格/分類/圖）
+  | 'shop-products'
   // Round 5C：帳號審核（自助註冊者，僅 owner）
   | 'approvals'
 
@@ -69,6 +71,7 @@ export const PAGE_LABEL: Record<PageKey, string> = {
   'goals':            '館長目標',
   'notifications':    '通知',
   'orders':           '商城訂單',
+  'shop-products':    '商城商品',
   'approvals':        '帳號審核',
 }
 
@@ -134,6 +137,8 @@ export const PAGE_ACCESS_MATRIX: Record<PageKey, Record<EffectiveRole, PageAcces
   'notifications':    { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   // 階段 17：商城訂單 — owner 看全部、manager 看自己館取貨單、staff 擋
   'orders':           { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
+  // SC2：商城商品管理 — owner / manager 可管理單一商城；staff 擋
+  'shop-products':    { owner: 'full', manager: 'own_venue', staff: 'denied',    none: 'denied' },
   // Round 5C：帳號審核 — 僅 owner
   'approvals':        { owner: 'full', manager: 'denied',    staff: 'denied',    none: 'denied' },
 }
@@ -212,6 +217,7 @@ export function pathToPageKey(path: string): PageKey | null {
     ['ai-summary',       '/ai-summary'],
     ['notifications',    '/notifications'],
     ['goals',            '/goals'],
+    ['shop-products',    '/shop-products'],
     ['orders',           '/orders'],
     ['dashboard',        '/dashboard'],
     ['sessions',         '/sessions'],

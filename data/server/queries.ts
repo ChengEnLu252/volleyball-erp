@@ -2575,3 +2575,24 @@ export async function restockOrderItemsAsync(tx: Prisma.TransactionClient, order
     await tx.shopProduct.update({ where: { id: pid }, data: { onlineStock: agg._sum.stock ?? 0 } })
   }
 }
+
+
+// ============================================================
+// SC2 — 後台商品管理（讀取；寫入在 app/actions/shop-admin.ts）
+// ============================================================
+
+/** 後台單一商品（含下架），供編輯。 */
+export async function getShopAdminProductAsync(id: string): Promise<StoreProduct | null> {
+  if (!id) return null
+  const p = await prisma.shopProduct.findUnique({
+    where: { id },
+    include: { images: true, variants: true, categories: { include: { category: true } } },
+  })
+  return p ? mapStoreProduct(p) : null
+}
+
+/** 所有啟用中的分類（後台指派 / 前台導覽共用）。 */
+export async function getAllShopCategoriesAsync(): Promise<StoreCategory[]> {
+  const cats = await prisma.shopCategory.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } })
+  return cats.map((c) => ({ id: c.id, name: c.name, slug: c.slug }))
+}

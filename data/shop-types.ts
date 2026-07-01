@@ -96,3 +96,24 @@ export type PlaceOrderInput = {
 }
 
 export const SHOP_SHIPPING_FEE = 80
+
+// —— 後台商品管理（SC2）——
+export type ShopVariantInput = { size: string | null; color: string | null; stock: number; sku: string | null }
+
+export type ShopProductSaveInput = {
+  id?: string // undefined = 新增
+  name: string
+  unitPrice: number
+  compareAtPrice: number | null
+  description: string
+  emoji: string
+  isListed: boolean
+  categoryIds: string[]
+  images: string[] // 圖片網址（依序）
+  sizes: string[]
+  colors: StoreColor[]
+  /** 有規格軸時：各規格庫存 / SKU；無軸時忽略，用 onlineStock */
+  variants: ShopVariantInput[]
+  /** 無規格軸商品的庫存 */
+  onlineStock: number
+}
