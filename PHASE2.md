@@ -137,7 +137,8 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   目前 demo 無「販售/贈送/盤點」互動 UI（皆 seed 資料）→ 本回合純讀取。DB 商品 seed 稀疏（4 項，placeholder）。
   build 綠 + 探針（近 30 天：運動飲料售112/$3,920、護膝售99/$27,720、排球售93/$79,050、球魔方帽售113/$28,250）。
 - ⏳ **P2.4b 跨館調貨**：新表 `product_transfers`（申請→出貨→收貨→完成，樂觀鎖）；`products/transfers` 頁接 DB。
-- ⏳ **P2.4c 線上商城 + 訂單**：新表 `shop_products` + `orders` + `order_items`（獨立線上庫存池、金流手動標記留 P2.5）。
+- 🚀 **P2.4c 線上商城 + 訂單 → 升級為「商城 Cyberbiz 化」（SC 系列，見下）**：對方希望把商城做成跟他們現用的
+  Cyberbiz 店 `lineaone.cyberbiz.co` 一模一樣（省年費），介面照抄、保留我們的可愛粉紅元素（奶狗粉 `#f7b8cd`）。
 - 🟡 **P2.4d 收尾串接（部分完成）**：
   - ✅ **異常清單「商品贈送過量(gift_excess)」**：`getReconciliationAnomaliesForUserAsync` 第 4 類，由
     `getProductReconciliationForUserAsync` 的 `hasGiftAnomaly`（**逐館**贈比 >30%、樣本≥5）產生；AnomaliesClient
@@ -145,6 +146,22 @@ Phase 1 只把「核心實體」入了 DB。以下目前仍只存在 `data/store
   - ✅ **dashboard 商品營收/低庫存接真**：商品營收原已由 `revenueByVenue` 加總真 ProductTransaction（Round 9D）；
     本回合把 `stockAlerts` 從寫死 0 改為**真低庫存數**（該館限定+共用商品 currentStock≤水位）。探針：目前 seed 0 筆（庫存健康）。
   - ⏳ **誠實商店（=P2.2e）**：新表 `box_audits` + 月記帳「誠實商店」桶系統側 — 待對方標記**哪些是誠實商店商品**後做。
+
+### SC 商城 Cyberbiz 化（前台+後台 MVP；取代 P2.4c）
+> 目標：刻成跟對方 `lineaone.cyberbiz.co` 一模一樣，保留可愛粉紅元素。金流/物流/發票留接口（簽約後）。
+> 🔑 **真商品已到手**：透過 Cyberbiz 官方 `/products/<handle>.json` 抓到全店 **49 商品 / 124 圖 / 0 失敗**，
+>   存 `prisma/seed-data/lineaone-catalog.json`（含色×尺寸款式、各庫存、SKU、售價/原價、真 CDN 圖）。
+
+- ✅ **SC1 資料地基（本輪完成）**：新 model `ShopCategory / ShopProduct / ShopProductVariant / ShopProductImage /
+  ShopProductCategory(多對多) / Order / OrderItem` + enums（migration `20260701120000_shop_ecommerce_models`，已部署
+  Supabase）。分類走「可自建表＋多對多」。seed 改吃 `lineaone-catalog.json` 真目錄（7 分類：限時團購/排球/籃球/匹克球/
+  服飾聯名/配件器材/Conti，關鍵字歸類、多屬）；示範原價/特價、多圖、款式庫存。**UI 仍讀記憶體（SC4 再切 DB）**。build 綠。
+  ⚠️ 尚未對 DB 重跑 seed（wipe+reseed 由使用者決定時機）。
+- ⏳ **SC2 後台商品管理（admin 風）**：商品 CRUD（新增/編輯、規格矩陣、分類、多圖、上下架、原價/特價）— 目前最大的洞。
+- ⏳ **SC3 後台訂單管理（admin 風）**：訂單列表(狀態/搜尋)＋詳情狀態流(待付→已付→出貨→完成/取消/退貨＋物流欄位)接 DB。
+- ⏳ **SC4 前台改版（storefront 視覺）**：首頁 hero＋分類導覽＋商品格狀；商品卡(原價劃線/特價/售罄徽章)；詳情多圖＋規格；讀 DB。保留粉紅。
+- ⏳ **SC5 前台結帳+會員**：購物車→結帳→下單寫 DB(樂觀鎖扣庫存)＋訂單確認＋會員/訂單查詢。
+- ⏳ **SC6 接口收尾**：金流/物流/發票/優惠券留接口；**批次下載真圖自存**（脫離 Cyberbiz CDN）；catalog 重抓刷新機制。
 
 ### P2.5 外接整合（可與上面並行）
 - **真 LINE 登入**：LINE OAuth 接客戶報名端（取代 `components/booking/LineLoginModal` 的 mock）。

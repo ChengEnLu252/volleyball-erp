@@ -23,7 +23,8 @@
 //    用對方提供的真實日期，不再相對於今天。
 // ============================================================
 
-import { PrismaClient } from '@prisma/client'
+import { readFileSync } from 'node:fs'
+import { PrismaClient, Prisma } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 import { GENERATED } from '../data/generator'
 
@@ -71,6 +72,13 @@ async function main() {
 
   // ── 1. 清空（反向 FK 順序，確保可重複執行）──────────────────
   console.log('清空既有資料...')
+  await prisma.orderItem.deleteMany()
+  await prisma.order.deleteMany()
+  await prisma.shopProductCategory.deleteMany()
+  await prisma.shopProductImage.deleteMany()
+  await prisma.shopProductVariant.deleteMany()
+  await prisma.shopProduct.deleteMany()
+  await prisma.shopCategory.deleteMany()
   await prisma.auditLog.deleteMany()
   await prisma.payment.deleteMany()
   await prisma.registration.deleteMany()
@@ -240,6 +248,113 @@ async function main() {
       })),
     }),
   )
+
+  // ── §S 線上商城（SC1）──────────────────────────────────────
+  // 🟢 商品 = 對方 lineaone.cyberbiz.co 的「真」商品目錄（49 項），
+  //    由官方 /products/<handle>.json 抓下（見 prisma/seed-data/lineaone-catalog.json）。
+  //    圖片先用 Cyberbiz CDN 簽名網址；正式脫離 Cyberbiz 前批次下載自存（收尾）。
+  // ⚠️ TODO[簽約後校對]：庫存數字/上下架以對方後台為準；重抓 catalog 覆蓋即可。
+  type CatalogItem = {
+    handle: string; sourceId: number; title: string; unitPrice: number
+    compareAtPrice: number | null; available: boolean
+    sizes: string[]; colors: { name: string; hex: string }[]
+    variants: { size: string | null; color: string | null; stock: number; sku: string | null; price: number; compareAtPrice: number | null }[]
+    onlineStock: number; images: string[]; description: string; firstSku: string | null
+  }
+  const catalog: CatalogItem[] = JSON.parse(
+    readFileSync(new URL('./seed-data/lineaone-catalog.json', import.meta.url), 'utf8'),
+  )
+
+  // 分類 = 依真實商品組成（多對多；一個商品可屬多類）
+  const SHOP_CATEGORIES = [
+    { id: 'cat_promo',      name: '限時團購優惠', slug: 'promo',      sortOrder: 0 },
+    { id: 'cat_volleyball', name: '排球',         slug: 'volleyball', sortOrder: 1 },
+    { id: 'cat_basketball', name: '籃球',         slug: 'basketball', sortOrder: 2 },
+    { id: 'cat_pickleball', name: '匹克球',       slug: 'pickleball', sortOrder: 3 },
+    { id: 'cat_apparel',    name: '服飾／聯名',   slug: 'apparel',    sortOrder: 4 },
+    { id: 'cat_accessory',  name: '配件／器材',   slug: 'accessory',  sortOrder: 5 },
+    { id: 'cat_conti',      name: 'Conti 專區',   slug: 'conti',      sortOrder: 6 },
+  ]
+  await prisma.shopCategory.createMany({ data: SHOP_CATEGORIES })
+  console.log(`  ✓ shopCategories: ${SHOP_CATEGORIES.length}`)
+
+  // 依商品名稱關鍵字歸類（真實 taxonomy）
+  const classify = (name: string): string[] => {
+    const cats: string[] = []
+    if (/團購|限時|專屬/.test(name)) cats.push('cat_promo')
+    if (/匹克/.test(name)) cats.push('cat_pickleball')
+    else if (/籃球/.test(name)) cats.push('cat_basketball')
+    else if (/排球|沙灘|MIKASA|Pro Touch|V[45][MBC]?\d|合成皮|橡膠排球|旋風/i.test(name)) cats.push('cat_volleyball')
+    if (/T-?shirt|小狗|小貓|貓生|Volleymates|圖鑑|排咖|白帶|襪/i.test(name)) cats.push('cat_apparel')
+    if (/Conti/i.test(name)) cats.push('cat_conti')
+    // 器材/配件：球車/記分/球網/護膝/打氣/教練板/戰術板/鑰匙圈/零錢包/鞋帶/白貼/標示/球拍套組
+    if (/球車|記分|球網|護膝|打氣|教練板|戰術板|鑰匙圈|零錢包|鞋帶|白貼|白tape|標示|拍套組|球拍|球x/i.test(name)) cats.push('cat_accessory')
+    if (cats.length === 0) cats.push('cat_accessory') // 兜底
+    return [...new Set(cats)]
+  }
+  const emojiFor = (cats: string[]): string =>
+    cats.includes('cat_apparel') ? '👕' : cats.includes('cat_basketball') ? '🏀'
+      : cats.includes('cat_pickleball') ? '🥎' : cats.includes('cat_accessory') ? '🎒' : '🏐'
+
+  // 穩定 id：shop_<Cyberbiz sourceId>
+  const pid = (it: CatalogItem) => `shop_${it.sourceId}`
+  const hasAxes = (it: CatalogItem) => it.sizes.length > 0 || it.colors.length > 0
+
+  await insertChunked('shopProducts', catalog, (c) =>
+    prisma.shopProduct.createMany({
+      data: c.map((it) => ({
+        id: pid(it), name: it.title, unitPrice: it.unitPrice,
+        compareAtPrice: it.compareAtPrice,
+        onlineStock: it.onlineStock, isListed: it.available,
+        description: it.description, emoji: emojiFor(classify(it.title)),
+        sizes: it.sizes, colors: it.colors as unknown as Prisma.InputJsonValue,
+        sourceProductId: null,
+      })),
+    }),
+  )
+
+  // 規格：只有「有色/尺寸軸」的商品才建 variant 列；單一款商品用 onlineStock
+  const variantRows = catalog.filter(hasAxes).flatMap((it) =>
+    it.variants.map((v) => ({
+      shopProductId: pid(it), size: v.size, color: v.color, stock: v.stock, sku: v.sku,
+    })),
+  )
+  await insertChunked('shopProductVariants', variantRows, (c) => prisma.shopProductVariant.createMany({ data: c }))
+
+  const imageRows = catalog.flatMap((it) =>
+    it.images.map((url, i) => ({ shopProductId: pid(it), url, sortOrder: i })),
+  )
+  await insertChunked('shopProductImages', imageRows, (c) => prisma.shopProductImage.createMany({ data: c }))
+
+  const catRows = catalog.flatMap((it) =>
+    classify(it.title).map((categoryId) => ({ shopProductId: pid(it), categoryId })),
+  )
+  await insertChunked('shopProductCategories', catRows, (c) => prisma.shopProductCategory.createMany({ data: c }))
+
+  await insertChunked('orders', GENERATED.orders, (c) =>
+    prisma.order.createMany({
+      data: c.map((o) => ({
+        id: o.id, orderNo: o.orderNo, channel: o.channel,
+        customerName: o.customerName, customerPhone: o.customerPhone, customerEmail: o.customerEmail,
+        placedByUserId: o.placedByUserId,
+        itemTotal: o.itemTotal, shippingFee: o.shippingFee, total: o.total,
+        fulfillment: o.fulfillment, pickupVenueId: o.pickupVenueId,
+        shipping: (o.shipping ?? Prisma.JsonNull) as unknown as Prisma.InputJsonValue,
+        paymentChannel: o.paymentChannel, status: o.status, notes: o.notes,
+        paidAt: dt(o.paidAt), fulfilledAt: dt(o.fulfilledAt),
+        cancelledAt: dt(o.cancelledAt), cancelReason: o.cancelReason,
+        createdAt: dt(o.createdAt)!, updatedAt: dt(o.updatedAt)!,
+      })),
+    }),
+  )
+
+  const orderItemRows = GENERATED.orders.flatMap((o) =>
+    o.items.map((it) => ({
+      orderId: o.id, productId: it.productId, name: it.name, unitPrice: it.unitPrice,
+      quantity: it.quantity, subtotal: it.subtotal, size: it.size ?? null, color: it.color ?? null,
+    })),
+  )
+  await insertChunked('orderItems', orderItemRows, (c) => prisma.orderItem.createMany({ data: c }))
 
   console.log('✅ seed 完成')
 }
