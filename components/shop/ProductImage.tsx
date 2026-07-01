@@ -20,7 +20,7 @@ type Kind =
   | 'jersey' | 'shorts' | 'socks' | 'shoe' | 'sleeve'
   | 'ball' | 'drink' | 'cap' | 'knee' | 'ankle' | 'towel' | 'generic'
 
-function kindFor(p: Pick<ShopProduct, 'id' | 'category'>): Kind {
+function kindFor(p: Pick<ShopProduct, 'id'>): Kind {
   switch (p.id) {
     case 'shop_jersey': return 'jersey'
     case 'shop_shorts': return 'shorts'
@@ -38,7 +38,7 @@ function kindFor(p: Pick<ShopProduct, 'id' | 'category'>): Kind {
 }
 
 interface Props {
-  product: Pick<ShopProduct, 'id' | 'category' | 'imageUrl' | 'name' | 'emoji'>
+  product: Pick<ShopProduct, 'id' | 'imageUrl' | 'name' | 'emoji'>
   /** 選到的顏色 hex（詳情頁切色用）；無則用品牌粉 */
   accentHex?: string | null
   /** 圖的圓角；預設 md */

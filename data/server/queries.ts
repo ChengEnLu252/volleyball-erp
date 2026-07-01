@@ -21,6 +21,7 @@ import 'server-only'
 import { Prisma } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 import { deriveEffectiveRole, type EffectiveRole } from '@/data/permissions'
+import type { StoreColor, StoreVariant, StoreCategory, StoreProduct } from '@/data/shop-types'
 import type {
   Customer, Session, SeasonRental, Timeslot, Season, Venue,
   SkillLevel, SessionStatus, SeasonRentalStatus,
@@ -2229,4 +2230,64 @@ export async function getBookingOverviewAsync(venueId: string, days = 14): Promi
     totalRemainingSeats: Math.max(0, totalCapacity - totalRegistrations), totalCapacity,
     byDate: [...byDateMap.entries()].map(([date, sessions]) => ({ date, sessions })),
   }
+}
+
+
+// ============================================================
+// SC4 — 線上商城前台（公開讀取；讀真 DB）
+// ------------------------------------------------------------
+// 取代 data/api 的 listShopProducts / getShopProduct（讀記憶體）。
+// 商城為公開頁（無 ERP 登入），故無 scope；只回上架商品。
+// 回傳形狀相容既有 ShopProduct helpers（variants/sizes/colors/onlineStock）,
+// 另加 images[] / compareAtPrice / categories[] 供 Cyberbiz 版面用。
+// ============================================================
+
+export type { StoreColor, StoreVariant, StoreCategory, StoreProduct }
+
+type ShopProductWithRels = Prisma.ShopProductGetPayload<{
+  include: { images: true; variants: true; categories: { include: { category: true } } }
+}>
+
+function mapStoreProduct(p: ShopProductWithRels): StoreProduct {
+  const images = [...p.images].sort((a, b) => a.sortOrder - b.sortOrder).map((im) => im.url)
+  const variants: StoreVariant[] = p.variants.map((v) => ({ size: v.size, color: v.color, stock: v.stock }))
+  const categories: StoreCategory[] = p.categories
+    .map((pc) => pc.category)
+    .filter((c): c is NonNullable<typeof c> => !!c)
+    .sort((a, b) => a.sortOrder - b.sortOrder)
+    .map((c) => ({ id: c.id, name: c.name, slug: c.slug }))
+  return {
+    id: p.id, name: p.name, unitPrice: p.unitPrice, compareAtPrice: p.compareAtPrice,
+    onlineStock: p.onlineStock, isListed: p.isListed, description: p.description, emoji: p.emoji,
+    imageUrl: images[0] ?? null, images,
+    sizes: p.sizes,
+    colors: (p.colors as unknown as StoreColor[]) ?? [],
+    variants, categories,
+  }
+}
+
+/** 商城前台首頁資料：分類（排序）+ 上架商品（含圖/規格/分類）。 */
+export async function getShopStorefrontAsync(): Promise<{ categories: StoreCategory[]; products: StoreProduct[] }> {
+  const [cats, products] = await Promise.all([
+    prisma.shopCategory.findMany({ where: { isActive: true }, orderBy: { sortOrder: 'asc' } }),
+    prisma.shopProduct.findMany({
+      where: { isListed: true },
+      include: { images: true, variants: true, categories: { include: { category: true } } },
+      orderBy: { createdAt: 'desc' },
+    }),
+  ])
+  return {
+    categories: cats.map((c) => ({ id: c.id, name: c.name, slug: c.slug })),
+    products: products.map(mapStoreProduct),
+  }
+}
+
+/** 單一商品（詳情頁）。找不到 / 已下架回 null。 */
+export async function getShopProductViewAsync(id: string): Promise<StoreProduct | null> {
+  const p = await prisma.shopProduct.findUnique({
+    where: { id },
+    include: { images: true, variants: true, categories: { include: { category: true } } },
+  })
+  if (!p || !p.isListed) return null
+  return mapStoreProduct(p)
 }
